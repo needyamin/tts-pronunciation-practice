@@ -4,6 +4,8 @@ A desktop application for practicing English pronunciation with text-to-speech a
 
 **GitHub Repository**: [https://github.com/needyamin/tts-pronunciation-practice](https://github.com/needyamin/tts-pronunciation-practice)
 
+![Image](https://github.com/user-attachments/assets/e2907eeb-0e6e-45f7-bebe-2c8ba076d85a)
+
 ## Features
 
 - **Text-to-Speech**: Hear the pronunciation of any English word
