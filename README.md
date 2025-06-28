@@ -22,7 +22,9 @@ A desktop application for practicing English pronunciation with text-to-speech a
 - **Auto-Update System**: Automatic and manual update checks with GitHub integration
 
 ## Screenshots
+
 ![Image](https://github.com/user-attachments/assets/e2907eeb-0e6e-45f7-bebe-2c8ba076d85a)
+
 The application features a clean interface with:
 - Word input field with speak and stop buttons
 - Large IPA pronunciation display
