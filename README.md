@@ -19,6 +19,7 @@ A desktop application for practicing English pronunciation with text-to-speech a
 - **Thread-Safe Speech**: No GUI freezing during speech synthesis
 - **Auto-Clean Text**: Automatically removes formatting and extra spaces
 - **Stop Speech Control**: Stop button appears only during speech
+- **Auto-Update System**: Automatic and manual update checks with GitHub integration
 
 ## Screenshots
 
@@ -85,6 +86,8 @@ See the [Building Executable](#building-executable) section for detailed instruc
 - **History**: Click on any word in the history to look it up again
 - **Clear**: Use the "✖" button to clear the input field
 - **Stop Speech**: Use the "⏹ Stop" button (appears during speech) to cancel ongoing pronunciation
+- **Auto-Update**: Automatic update checks on startup and manual checks via button or system tray
+- **Update Notifications**: Beautiful update dialog with release notes and download links
 
 ### Keyboard Shortcuts
 
@@ -98,6 +101,7 @@ See the [Building Executable](#building-executable) section for detailed instruc
 - **Pillow**: Image processing for icons
 - **pystray**: System tray integration
 - **pyperclip**: Clipboard monitoring
+- **requests**: HTTP requests for auto-update functionality
 - **pyinstaller**: For building executable (development)
 - **tkinter**: GUI framework (included with Python)
 
@@ -128,6 +132,41 @@ tts-pronunciation-practice/
 3. **Text-to-Speech**: Uses pyttsx3 with Microsoft Zira voice (if available) for clear pronunciation
 4. **Background Operation**: Runs in system tray with ultra-fast clipboard monitoring for seamless workflow
 5. **Thread-Safe**: Speech synthesis runs in separate threads to prevent GUI freezing
+
+## Auto-Update System
+
+The application includes a comprehensive auto-update system:
+
+### Automatic Updates
+- **Startup Check**: Automatically checks for updates 2 seconds after application launch
+- **Rate Limiting**: Only checks once per hour to avoid excessive API calls
+- **Background Processing**: Update checks run in background threads without blocking the UI
+
+### Manual Updates
+- **Update Button**: Click "🔄 Check for Updates" in the main interface
+- **System Tray**: Right-click tray icon and select "Check for Updates"
+- **Status Feedback**: Shows "Checking for updates..." message during manual checks
+
+### Update Dialog
+When an update is available, a beautiful dialog appears with:
+- **Version Comparison**: Shows current vs. new version
+- **Release Notes**: Scrollable text with detailed update information
+- **Download Options**: Direct link to GitHub release page
+- **Skip Option**: Choose to skip the update for now
+
+### Configuration
+The update system is configured via constants in `speak.py`:
+```python
+REPO_OWNER = "needyamin"
+REPO_NAME = "tts-pronunciation-practice"
+CURRENT_VERSION = "1.0.0"  # Update this when releasing new versions
+```
+
+### GitHub Integration
+- **API Endpoint**: Uses GitHub Releases API for version checking
+- **Release Tags**: Expects version tags in format `v1.0.1`, `v1.1.0`, etc.
+- **Release Notes**: Displays the release body text in the update dialog
+- **Download Links**: Provides direct links to GitHub release pages
 
 ## Building Executable
 
@@ -211,6 +250,24 @@ Modify voice properties in the code:
 engine.setProperty('rate', 150)  # Speed (words per minute)
 # Change voice selection logic for different voices
 ```
+
+### Version Management
+
+To release a new version:
+
+1. **Update Version Number**: Change `CURRENT_VERSION` in `speak.py`:
+   ```python
+   CURRENT_VERSION = "1.0.1"  # Increment version number
+   ```
+
+2. **Create GitHub Release**: 
+   - Tag the release with version (e.g., `v1.0.1`)
+   - Add release notes in the description
+   - Upload the new executable files
+
+3. **Build New Executable**: Run `python build.py` to create updated executables
+
+The auto-update system will automatically detect the new version and notify users.
 
 ## Troubleshooting
 
