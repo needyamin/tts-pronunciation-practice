@@ -16,14 +16,12 @@ A desktop application for practicing English pronunciation with text-to-speech a
 - **System Tray**: Runs in background with system tray icon (single instance)
 - **History**: Clickable history of previously looked-up words
 - **Modern UI**: Clean, intuitive interface with beautiful design
-- **Thread-Safe Speech**: No GUI freezing during speech synthesis
+- **Subprocess-Based TTS**: Each speech session runs in complete isolation for maximum reliability
+- **Instant Stop Control**: Stop button responds immediately and terminates speech instantly
 - **Auto-Clean Text**: Automatically removes formatting and extra spaces
-- **Stop Speech Control**: Stop button appears only during speech
 - **Auto-Update System**: Automatic and manual update checks with GitHub integration
 
 ## Screenshots
-
-![Image](https://github.com/user-attachments/assets/e2907eeb-0e6e-45f7-bebe-2c8ba076d85a)
 
 The application features a clean interface with:
 - Word input field with speak and stop buttons
@@ -132,8 +130,9 @@ tts-pronunciation-practice/
 1. **IPA Dictionary**: The app downloads a comprehensive CMU dictionary with 170,000+ English words and their IPA transcriptions
 2. **Multiple Sources**: For words not in the main dictionary, it checks custom corrections and falls back to the eng-to-ipa library
 3. **Text-to-Speech**: Uses pyttsx3 with Microsoft Zira voice (if available) for clear pronunciation
-4. **Background Operation**: Runs in system tray with ultra-fast clipboard monitoring for seamless workflow
-5. **Thread-Safe**: Speech synthesis runs in separate threads to prevent GUI freezing
+4. **Subprocess Isolation**: Each TTS session runs in a separate Python process for complete isolation and reliability
+5. **Background Operation**: Runs in system tray with ultra-fast clipboard monitoring for seamless workflow
+6. **Instant Stop**: Subprocess-based approach allows immediate termination of speech with no lingering state issues
 
 ## Auto-Update System
 

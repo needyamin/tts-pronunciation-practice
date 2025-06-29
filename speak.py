@@ -14,6 +14,8 @@ import pyperclip
 import requests
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 
 # Path to the large IPA dictionary file
 IPA_DICT_PATH = "cmudict-0.7b-ipa.txt"
@@ -28,6 +30,86 @@ CUSTOM_IPA = {
 
 # Looser IPA validation regex (includes more IPA symbols, diacritics, and punctuation)
 IPA_REGEX = re.compile(r"^[ˈˌa-zA-Zɪʊəɔæɑɛʌθðŋʃʒɹɝɚɡɾɫʔʤʧːˑ˞ˠˤ̩̯̃ʼ˺ˈˌːˑ˞ˠˤ̩̯̃ʼ˺\.\s,\-]+$")
+
+# Global settings variables
+settings = {
+    'tts_enabled': True,
+    'clipboard_monitoring': True,
+    'auto_speak': True,
+    'speech_rate': 150,
+    'voice_name': 'zira',
+    'volume': 1.0,  # Volume level (0.0 to 1.0)
+    'show_ipa': True  # Whether to show IPA pronunciation
+}
+
+# Settings file path
+SETTINGS_FILE = Path("settings.json")
+
+def load_settings():
+    """Load settings from file"""
+    global settings
+    try:
+        settings_file = Path("settings.json")
+        if settings_file.exists():
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                loaded_settings = json.load(f)
+                # Update settings with loaded values, keeping defaults for missing keys
+                for key, value in loaded_settings.items():
+                    if key in settings:
+                        # Ensure proper type conversion
+                        if key in ['tts_enabled', 'clipboard_monitoring', 'auto_speak', 'show_ipa']:
+                            settings[key] = bool(value)
+                        elif key == 'speech_rate':
+                            settings[key] = int(value)
+                        elif key == 'volume':
+                            settings[key] = float(value)
+                        else:
+                            settings[key] = value
+                print(f"Settings loaded from: {settings_file.absolute()}")
+                print(f"Loaded settings: {settings}")
+        else:
+            # Create default settings file if it doesn't exist
+            print(f"Settings file not found, creating default: {settings_file.absolute()}")
+            save_settings_to_file()
+    except Exception as e:
+        print(f"Failed to load settings: {e}")
+        # Create default settings file
+        save_settings_to_file()
+
+def save_settings_to_file():
+    """Save settings to file"""
+    try:
+        with open("settings.json", 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+        
+        print(f"Settings saved to: {Path('settings.json').absolute()}")
+        
+        if Path("settings.json").exists():
+            file_size = Path("settings.json").stat().st_size
+        else:
+            pass
+            
+    except Exception as e:
+        print(f"Failed to save settings: {e}")
+        try:
+            import tempfile
+            temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', encoding='utf-8')
+            json.dump(settings, temp_file, indent=2, ensure_ascii=False)
+            temp_file.close()
+            
+            import shutil
+            shutil.move(temp_file.name, "settings.json")
+            print(f"Settings saved using alternative method: {Path('settings.json').absolute()}")
+        except Exception as e2:
+            print(f"Alternative save method also failed: {e2}")
+
+# Load settings on startup
+load_settings()
+
+# Ensure settings file exists
+if not Path("settings.json").exists():
+    print("Creating initial settings file...")
+    save_settings_to_file()
 
 def is_valid_english_ipa(s):
     # Only allow strings that are likely to be English IPA
@@ -63,13 +145,25 @@ load_large_ipa_dict()
 # Initialize pyttsx3
 engine = pyttsx3.init()
 
-# Set clear voice (adjust based on your system)
+# Set voice and rate based on settings
+# Find the voice by name
+selected_voice_id = None
 for voice in engine.getProperty('voices'):
-    if "zira" in voice.name.lower():  # Choose Microsoft Zira if available
-        engine.setProperty('voice', voice.id)
+    if settings['voice_name'].lower() in voice.name.lower():
+        selected_voice_id = voice.id
         break
 
-engine.setProperty('rate', 150)
+# If no matching voice found, use the first available
+if not selected_voice_id:
+    voices = engine.getProperty('voices')
+    if voices:
+        selected_voice_id = voices[0].id
+
+if selected_voice_id:
+    engine.setProperty('voice', selected_voice_id)
+
+engine.setProperty('rate', settings['speech_rate'])
+engine.setProperty('volume', settings['volume'])
 
 # Store history
 history = []
@@ -84,6 +178,10 @@ should_run_clipboard = True
 # Thread-safe variables for speech
 speech_thread = None
 is_speaking = False
+current_speech_engine = None
+speech_lock = threading.Lock()
+global_engine = None
+current_subprocess = None  # Track current subprocess for stopping
 
 # --- Update Check Constants ---
 REPO_OWNER = "needyamin"
@@ -266,23 +364,14 @@ def show_update_dialog(update_info):
     skip_btn.pack(side="left")
 
 def check_updates_in_background():
-    """Check for updates in background thread"""
     def update_checker():
         try:
-            print("[DEBUG] Background update checker started")  # Debug output
             update_info = check_for_updates()
-            print(f"[DEBUG] Update check result: {update_info}")  # Debug output
             if update_info:
-                print("[DEBUG] Update available, showing dialog")  # Debug output
-                # Show update dialog in main thread
                 root.after(0, lambda: show_update_dialog(update_info))
-            else:
-                print("[DEBUG] No update available")  # Debug output
         except Exception as e:
             print(f"Background update check failed: {e}")
     
-    # Start update check in background
-    print("[DEBUG] Starting background update thread")  # Debug output
     threading.Thread(target=update_checker, daemon=True).start()
 
 # Create a beautiful 'Y' logo for the tray and window icon
@@ -311,29 +400,24 @@ def create_image():
 
 def on_quit(icon, item):
     global should_run_clipboard, is_speaking, tray_icon
-    print("[DEBUG] Quitting application...")
     should_run_clipboard = False
-    is_speaking = False  # Stop any ongoing speech
+    is_speaking = False
     
-    # Properly stop the tray icon
     if tray_icon:
         try:
             tray_icon.visible = False
             tray_icon.stop()
-            print("[DEBUG] Tray icon stopped successfully")
         except Exception as e:
             print(f"Error stopping tray icon: {e}")
         finally:
             tray_icon = None
     
-    # Destroy the main window
     if root:
         try:
             root.destroy()
         except Exception as e:
             print(f"Error destroying root window: {e}")
     
-    print("[DEBUG] Application quit complete")
     sys.exit()
 
 def show_window(icon, item):
@@ -343,7 +427,6 @@ def show_window(icon, item):
 def hide_window():
     if root:
         root.withdraw()
-    # Ensure tray icon is visible (don't create new ones)
     global tray_icon
     if tray_icon and not tray_icon.visible:
         try:
@@ -353,210 +436,234 @@ def hide_window():
 
 def on_closing():
     global is_speaking
-    print("[DEBUG] Window closing (X button clicked)")
-    is_speaking = False  # Stop any ongoing speech
+    is_speaking = False
     hide_window()
 
 def setup_tray():
     global tray_icon
-    # Only create tray icon if it doesn't already exist
     if tray_icon is None:
         try:
             menu = pystray.Menu(
                 pystray.MenuItem('Show', show_window),
-                pystray.MenuItem('Check for Updates', lambda: check_updates_in_background()),
                 pystray.MenuItem('Quit', on_quit)
             )
             tray_icon = pystray.Icon("tts_pronunciation", create_image(), "TTS Pronunciation", menu)
             threading.Thread(target=tray_icon.run, daemon=True).start()
-            print("[DEBUG] Tray icon created successfully")
         except Exception as e:
             print(f"Error creating tray icon: {e}")
             tray_icon = None
     else:
-        # If tray icon exists, just ensure it's visible
         if not tray_icon.visible:
             try:
                 tray_icon.visible = True
-                print("[DEBUG] Made existing tray icon visible")
             except Exception as e:
                 print(f"Error making tray icon visible: {e}")
-                # If there's an error, don't recreate - just log it
 
 # Clipboard monitoring thread
 def clipboard_monitor():
     global last_clipboard
     while should_run_clipboard:
         try:
-            # Get clipboard content and ensure it's clean plain text
+            if not settings['clipboard_monitoring']:
+                time.sleep(0.1)
+                continue
+                
             current = pyperclip.paste()
             
-            # Convert to string and clean thoroughly
             if isinstance(current, str):
-                # Remove all formatting and get clean text
                 cleaned_current = current.strip()
-                # Remove any special characters that might be formatting artifacts
-                cleaned_current = re.sub(r'[\r\n\t]', ' ', cleaned_current)  # Replace newlines/tabs with spaces
-                cleaned_current = re.sub(r'\s+', ' ', cleaned_current)  # Replace multiple spaces with single space
-                cleaned_current = cleaned_current.strip()  # Final trim
+                cleaned_current = re.sub(r'[\r\n\t]', ' ', cleaned_current)
+                cleaned_current = re.sub(r'\s+', ' ', cleaned_current)
+                cleaned_current = cleaned_current.strip()
             else:
                 cleaned_current = ""
             
-            # Process ANY non-empty content - no restrictions at all
             if cleaned_current != last_clipboard and cleaned_current and len(cleaned_current) > 0:
-                print(f"[DEBUG] Clipboard detected: '{cleaned_current}'")  # Debug output
                 last_clipboard = cleaned_current
-                # Process any copied content, regardless of window state or content
                 root.after(0, lambda: auto_paste_word(cleaned_current))
         except Exception as e:
             print(f"Clipboard error: {e}")
             pass
-        time.sleep(0.01)  # Extremely fast - check every 10ms for instant response
+        time.sleep(0.01)
 
 def auto_paste_word(word):
-    print(f"[DEBUG] auto_paste_word called with: '{word}'")  # Debug output
-    
-    # Process ANY content that is not completely empty - no restrictions
     if word and len(word) > 0:
-        print(f"[DEBUG] Processing word: '{word}'")  # Debug output
-        
-        # Immediately stop any current speech
         global is_speaking
         if is_speaking:
             is_speaking = False
             speak_btn.config(text="🔊 Speak", bg="#1a73e8")
             stop_btn.grid_remove()
         
-        # Clean the word thoroughly - remove all formatting and extra characters
         cleaned_word = word.strip()
-        # Remove any remaining formatting artifacts
-        cleaned_word = re.sub(r'[\r\n\t]', ' ', cleaned_word)  # Replace newlines/tabs with spaces
-        cleaned_word = re.sub(r'\s+', ' ', cleaned_word)  # Replace multiple spaces with single space
-        cleaned_word = cleaned_word.strip()  # Final trim
+        cleaned_word = re.sub(r'[\r\n\t]', ' ', cleaned_word)
+        cleaned_word = re.sub(r'\s+', ' ', cleaned_word)
+        cleaned_word = cleaned_word.strip()
         
-        print(f"[DEBUG] Cleaned word: '{cleaned_word}'")  # Debug output
-        
-        # Process ANY non-empty content - no validation restrictions
         if cleaned_word and len(cleaned_word) > 0:
             entry.delete(0, tk.END)
             entry.insert(0, cleaned_word)
-            entry.focus_set()  # Focus the entry field
+            entry.focus_set()
             
-            print(f"[DEBUG] Starting speech for: '{cleaned_word}'")  # Debug output
-            # Always start speaking immediately - no restrictions
-            speak_text()
-        else:
-            print(f"[DEBUG] Cleaned word is empty, skipping")  # Debug output
-    else:
-        print(f"[DEBUG] Word is completely empty, skipping")  # Debug output
+            if settings['auto_speak']:
+                speak_text()
 
 def stop_speech():
-    """Stop current speech if any"""
-    global is_speaking
-    if is_speaking:
-        is_speaking = False
-        speak_btn.config(text="🔊 Speak", bg="#1a73e8")
-        stop_btn.grid_remove()  # Hide stop button
-        # Note: pyttsx3 doesn't have a direct stop method, but we can prevent new speech
-
-# --- End System Tray and Clipboard Monitoring ---
-
-def speak_in_thread(text):
-    """Speak text in a separate thread to prevent GUI freezing"""
-    global is_speaking
-    try:
-        is_speaking = True
-        # Create a new engine instance for this thread
-        thread_engine = pyttsx3.init()
-        
-        # Set the same properties as the main engine
-        for voice in thread_engine.getProperty('voices'):
-            if "zira" in voice.name.lower():
-                thread_engine.setProperty('voice', voice.id)
-                break
-        thread_engine.setProperty('rate', 150)
-        
-        # Speak the text
-        thread_engine.say(text)
-        thread_engine.runAndWait()
-        
-        # Clean up
-        thread_engine.stop()
-    except Exception as e:
-        print(f"Speech error: {e}")
-        # Show error in UI
-        if root:
-            root.after(0, lambda: ipa_label.config(text=f"Speech Error: {str(e)[:30]}...", fg="red"))
-    finally:
-        is_speaking = False
-        # Update UI to show speech is complete
-        if root:
-            root.after(0, lambda: speak_btn.config(text="🔊 Speak", bg="#1a73e8"))
-            root.after(0, lambda: stop_btn.grid_remove())  # Hide stop button
-            print('[DEBUG] Stop button hidden after speech ends')
-
-def speak_text(event=None):
-    global speech_thread, is_speaking
+    global is_speaking, current_speech_engine, speech_thread, global_engine, current_subprocess
+    is_speaking = False
     
-    # Hide stop button if not speaking
+    # Force stop subprocess immediately
+    if current_subprocess:
+        try:
+            current_subprocess.terminate()
+            # Give it a moment to terminate gracefully
+            current_subprocess.wait(timeout=0.5)
+        except Exception:
+            try:
+                # Force kill if terminate didn't work
+                current_subprocess.kill()
+                current_subprocess.wait(timeout=0.5)
+            except Exception:
+                pass
+        current_subprocess = None
+    
+    if current_speech_engine:
+        try:
+            current_speech_engine.stop()
+        except Exception:
+            pass
+        current_speech_engine = None
+    
+    if global_engine:
+        try:
+            global_engine.stop()
+        except Exception:
+            pass
+        global_engine = None
+    
+    speak_btn.config(text="🔊 Speak", bg="#1a73e8")
     stop_btn.grid_remove()
     
-    # Prevent multiple simultaneous speech requests
-    if is_speaking:
+    # Force kill any running thread
+    if speech_thread and speech_thread.is_alive():
+        try:
+            speech_thread.join(timeout=0.1)
+        except Exception:
+            pass
+    speech_thread = None
+    
+    # Force cleanup
+    import gc
+    gc.collect()
+    
+    # Reset all state completely
+    is_speaking = False
+    current_speech_engine = None
+    global_engine = None
+    current_subprocess = None
+
+def speak_text(event=None):
+    global speech_thread, is_speaking, current_speech_engine, global_engine, current_subprocess
+    
+    if not settings['tts_enabled']:
+        messagebox.showinfo("TTS Disabled", "Text-to-Speech is currently disabled in settings.")
         return
+    
+    # Always reset state before starting
+    is_speaking = False
+    current_speech_engine = None
+    global_engine = None
+    current_subprocess = None
+    
+    if speech_thread and speech_thread.is_alive():
+        try:
+            speech_thread.join(timeout=0.05)
+        except:
+            pass
+    speech_thread = None
+    
+    # Reduced delay for faster response
+    time.sleep(0.05)
     
     text = entry.get().strip()
     if not text:
         messagebox.showwarning("Input Error", "Please enter some text.")
         return
 
-    print(f"[DEBUG] speak_text called with: '{text}'")  # Debug output
-
-    # Save to history
     if text not in history:
         history.insert(0, text)
         update_history_ui()
 
-    # Update UI to show speech is starting
     speak_btn.config(text="🔊 Speaking...", bg="#ff9800")
-    stop_btn.grid()  # Show stop button
+    stop_btn.grid()
     
-    print(f"[DEBUG] Starting speech thread for: '{text}'")  # Debug output
+    # Show initializing message
+    ipa_label.config(text="Initializing TTS engine...", fg="#ff9800")
     
-    # Start speech in separate thread
-    speech_thread = threading.Thread(target=speak_in_thread, args=(text,), daemon=True)
+    # Use subprocess approach for complete isolation
+    speech_thread = threading.Thread(target=speak_in_thread_subprocess, args=(text,), daemon=True)
     speech_thread.start()
 
-    # Show pronunciation using large IPA dict, custom IPA, or eng_to_ipa
-    words = text.split()
-    if len(words) == 1:
-        word_lower = text.lower()
-        ipa_result = None
-        # 1. Check large IPA dictionary
-        if word_lower in large_ipa_dict:
-            ipa_result = large_ipa_dict[word_lower]
-        # 2. Check custom IPA
-        elif word_lower in CUSTOM_IPA:
-            ipa_result = CUSTOM_IPA[word_lower]
-        # 3. Fallback to eng_to_ipa
-        else:
-            try:
-                ipa_result = ipa.convert(text)
-                if ipa_result == text:
-                    ipa_result = None
-            except Exception as e:
-                print(f"IPA conversion error: {e}")
-                ipa_result = None
-        # Validate IPA result
-        if ipa_result and is_valid_english_ipa(ipa_result):
-            ipa_label.config(text=ipa_result, fg="#1a73e8")
-        else:
-            if ipa_result:
-                ipa_label.config(text=f"(Not found, raw: {ipa_result})", fg="red")
+def speak_in_thread_subprocess(text):
+    """Thread function using subprocess approach"""
+    global is_speaking
+    
+    try:
+        is_speaking = True
+        
+        # Clear initializing message and show IPA
+        if root:
+            root.after(0, lambda: show_ipa_for_text(text))
+        
+        # Check if we should still speak
+        if not is_speaking:
+            return
+        
+        # Use subprocess approach
+        success = speak_with_subprocess(text)
+        
+        if not success:
+            if root:
+                root.after(0, lambda: ipa_label.config(text="TTS failed", fg="red"))
+        
+    except Exception as e:
+        if root:
+            root.after(0, lambda: ipa_label.config(text=f"Error: {str(e)[:30]}...", fg="red"))
+    finally:
+        is_speaking = False
+        
+        if root:
+            root.after(0, lambda: speak_btn.config(text="🔊 Speak", bg="#1a73e8"))
+            root.after(0, lambda: stop_btn.grid_remove())
+
+def show_ipa_for_text(text):
+    """Display IPA for the given text"""
+    if settings['show_ipa']:
+        words = text.split()
+        if len(words) == 1:
+            word_lower = text.lower()
+            ipa_result = None
+            if word_lower in large_ipa_dict:
+                ipa_result = large_ipa_dict[word_lower]
+            elif word_lower in CUSTOM_IPA:
+                ipa_result = CUSTOM_IPA[word_lower]
             else:
-                ipa_label.config(text="(Not found)", fg="red")
+                try:
+                    ipa_result = ipa.convert(text)
+                    if ipa_result == text:
+                        ipa_result = None
+                except Exception as e:
+                    ipa_result = None
+            if ipa_result and is_valid_english_ipa(ipa_result):
+                ipa_label.config(text=ipa_result, fg="#1a73e8")
+            else:
+                if ipa_result:
+                    ipa_label.config(text=f"(Not found, raw: {ipa_result})", fg="red")
+                else:
+                    ipa_label.config(text="(Not found)", fg="red")
+        else:
+            ipa_label.config(text="(Enter a single English word)", fg="red")
     else:
-        ipa_label.config(text="(Enter a single English word)", fg="red")
+        ipa_label.config(text="", fg="#1a73e8")
 
 def on_history_click(word):
     entry.delete(0, tk.END)
@@ -568,12 +675,465 @@ def clear_entry():
     entry.delete(0, tk.END)
     ipa_label.config(text="", fg="#1a73e8")
 
+def clear_history():
+    global history
+    history.clear()
+    update_history_ui()
+
+def show_settings():
+    """Show settings dialog"""
+    settings_window = tk.Toplevel(root)
+    settings_window.title("Settings")
+    settings_window.geometry("520x580")  # Increased height to ensure buttons are visible
+    settings_window.resizable(False, False)
+    settings_window.configure(bg="#f5f5f5")
+    settings_window.transient(root)
+    settings_window.grab_set()
+    
+    # Center the window
+    settings_window.update_idletasks()
+    x = (settings_window.winfo_screenwidth() // 2) - (520 // 2)
+    y = (settings_window.winfo_screenheight() // 2) - (580 // 2)
+    settings_window.geometry(f"520x580+{x}+{y}")
+    
+    # Create main container
+    main_container = tk.Frame(settings_window, bg="#f5f5f5")
+    main_container.pack(fill="both", expand=True, padx=20, pady=20)
+    
+    # Header
+    header = tk.Label(main_container, text="⚙️ Settings", font=("Segoe UI", 16, "bold"), 
+                     bg="#f5f5f5", fg="#333")
+    header.pack(pady=(0, 20))
+    
+    # Create content frame
+    content_frame = tk.Frame(main_container, bg="#f5f5f5")
+    content_frame.pack(fill="both", expand=True)
+    
+    # Text-to-Speech Settings Section
+    tts_frame = tk.LabelFrame(content_frame, text="Text-to-Speech", font=("Segoe UI", 12, "bold"),
+                             bg="#f5f5f5", fg="#333", relief="solid", bd=1)
+    tts_frame.pack(fill="x", pady=(0, 15))
+    
+    # TTS Enable/Disable
+    tts_enabled_var = tk.BooleanVar(value=settings['tts_enabled'])
+    tts_check = tk.Checkbutton(tts_frame, text="Enable Text-to-Speech", 
+                              variable=tts_enabled_var, font=("Segoe UI", 11),
+                              bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
+    tts_check.pack(anchor="w", padx=15, pady=(10, 5))
+    
+    # Auto-speak on clipboard
+    auto_speak_var = tk.BooleanVar(value=settings['auto_speak'])
+    auto_speak_check = tk.Checkbutton(tts_frame, text="Auto-speak when text is copied", 
+                                     variable=auto_speak_var, font=("Segoe UI", 11),
+                                     bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
+    auto_speak_check.pack(anchor="w", padx=15, pady=(0, 5))
+    
+    # Speech Rate
+    rate_frame = tk.Frame(tts_frame, bg="#f5f5f5")
+    rate_frame.pack(fill="x", padx=15, pady=(0, 10))
+    
+    tk.Label(rate_frame, text="Speech Rate:", font=("Segoe UI", 11), 
+            bg="#f5f5f5", fg="#333").pack(side="left")
+    
+    rate_var = tk.IntVar(value=settings['speech_rate'])
+    rate_scale = tk.Scale(rate_frame, from_=50, to=300, orient="horizontal", 
+                         variable=rate_var, font=("Segoe UI", 10),
+                         bg="#f5f5f5", fg="#333", highlightthickness=0)
+    rate_scale.pack(side="left", padx=(10, 0), fill="x", expand=True)
+    
+    # Volume Control
+    volume_frame = tk.Frame(tts_frame, bg="#f5f5f5")
+    volume_frame.pack(fill="x", padx=15, pady=(0, 10))
+    
+    tk.Label(volume_frame, text="Volume:", font=("Segoe UI", 11), 
+            bg="#f5f5f5", fg="#333").pack(side="left")
+    
+    volume_var = tk.DoubleVar(value=settings['volume'])
+    volume_scale = tk.Scale(volume_frame, from_=0.0, to=1.0, orient="horizontal", 
+                           variable=volume_var, font=("Segoe UI", 10),
+                           bg="#f5f5f5", fg="#333", highlightthickness=0,
+                           resolution=0.1)
+    volume_scale.pack(side="left", padx=(10, 0), fill="x", expand=True)
+    
+    # Voice Selection
+    voice_frame = tk.Frame(tts_frame, bg="#f5f5f5")
+    voice_frame.pack(fill="x", padx=15, pady=(0, 10))
+    
+    tk.Label(voice_frame, text="Voice:", font=("Segoe UI", 11), 
+            bg="#f5f5f5", fg="#333").pack(side="left")
+    
+    # Get available voices with their IDs
+    available_voices = []
+    voice_id_map = {}
+    for voice in engine.getProperty('voices'):
+        voice_name = voice.name
+        available_voices.append(voice_name)
+        voice_id_map[voice_name] = voice.id
+    
+    # Find the current voice name based on the stored voice_name
+    current_voice_name = None
+    for voice_name in available_voices:
+        if settings['voice_name'].lower() in voice_name.lower():
+            current_voice_name = voice_name
+            break
+    
+    # If no match found, use the first available voice
+    if not current_voice_name and available_voices:
+        current_voice_name = available_voices[0]
+    
+    voice_var = tk.StringVar(value=current_voice_name if current_voice_name else "")
+    voice_combo = ttk.Combobox(voice_frame, textvariable=voice_var, 
+                              values=available_voices, font=("Segoe UI", 10),
+                              state="readonly", width=30)
+    voice_combo.pack(side="left", padx=(10, 0))
+    
+    # Clipboard Settings Section
+    clipboard_frame = tk.LabelFrame(content_frame, text="Clipboard Monitoring", font=("Segoe UI", 12, "bold"),
+                                   bg="#f5f5f5", fg="#333", relief="solid", bd=1)
+    clipboard_frame.pack(fill="x", pady=(0, 15))
+    
+    # Clipboard Enable/Disable
+    clipboard_enabled_var = tk.BooleanVar(value=settings['clipboard_monitoring'])
+    clipboard_check = tk.Checkbutton(clipboard_frame, text="Monitor clipboard for copied text", 
+                                    variable=clipboard_enabled_var, font=("Segoe UI", 11),
+                                    bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
+    clipboard_check.pack(anchor="w", padx=15, pady=(10, 5))
+    
+    # Show IPA setting
+    show_ipa_var = tk.BooleanVar(value=settings['show_ipa'])
+    show_ipa_check = tk.Checkbutton(clipboard_frame, text="Show IPA pronunciation", 
+                                   variable=show_ipa_var, font=("Segoe UI", 11),
+                                   bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
+    show_ipa_check.pack(anchor="w", padx=15, pady=(0, 10))
+    
+    # Buttons - Fixed at bottom of window
+    button_frame = tk.Frame(settings_window, bg="#f5f5f5")
+    button_frame.pack(side="bottom", fill="x", padx=25, pady=25)
+    
+    # Create a centered container for buttons
+    button_container = tk.Frame(button_frame, bg="#f5f5f5")
+    button_container.pack(expand=True)
+    
+    def save_settings():
+        global settings  # Ensure we're updating the global settings
+        
+        # Debug: Print current values before saving
+        print(f"[DEBUG] Current UI values:")
+        print(f"  TTS Enabled: {tts_enabled_var.get()}")
+        print(f"  Clipboard Monitoring: {clipboard_enabled_var.get()}")
+        print(f"  Auto Speak: {auto_speak_var.get()}")
+        print(f"  Show IPA: {show_ipa_var.get()}")
+        print(f"  Speech Rate: {rate_var.get()}")
+        print(f"  Volume: {volume_var.get()}")
+        print(f"  Voice: {voice_var.get()}")
+        
+        # Update global settings with proper type conversion
+        settings['tts_enabled'] = bool(tts_enabled_var.get())
+        settings['clipboard_monitoring'] = bool(clipboard_enabled_var.get())
+        settings['auto_speak'] = bool(auto_speak_var.get())
+        settings['speech_rate'] = int(rate_var.get())
+        settings['volume'] = float(volume_var.get())
+        settings['show_ipa'] = bool(show_ipa_var.get())
+        
+        # Debug: Print settings after update
+        print(f"[DEBUG] Settings after update:")
+        for key, value in settings.items():
+            print(f"  {key}: {value}")
+        
+        # Handle voice selection
+        selected_voice_name = voice_var.get()
+        if selected_voice_name and selected_voice_name in voice_id_map:
+            settings['voice_name'] = selected_voice_name
+            # Update the main engine voice
+            engine.setProperty('voice', voice_id_map[selected_voice_name])
+        
+        # Update engine properties immediately
+        engine.setProperty('rate', settings['speech_rate'])
+        engine.setProperty('volume', settings['volume'])
+        
+        # Save settings to file immediately
+        print(f"[DEBUG] Attempting to save settings to: {SETTINGS_FILE.absolute()}")
+        
+        # Force save with error handling
+        try:
+            # Save directly to current directory
+            with open("settings.json", 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+            print(f"[DEBUG] Settings saved directly to settings.json")
+            
+            # Also try the original method
+            save_settings_to_file()
+            
+        except Exception as e:
+            print(f"[DEBUG] Direct save failed: {e}")
+            save_settings_to_file()
+        
+        # Verify settings were saved
+        if Path("settings.json").exists():
+            print(f"[DEBUG] Settings file exists after save")
+            # Read back the file to verify content
+            try:
+                with open("settings.json", 'r', encoding='utf-8') as f:
+                    saved_content = json.load(f)
+                print(f"[DEBUG] File content after save: {saved_content}")
+                messagebox.showinfo("Settings Saved", f"Settings have been saved successfully!")
+            except Exception as e:
+                print(f"[DEBUG] Error reading saved file: {e}")
+                messagebox.showwarning("Settings Warning", f"Settings saved but could not verify: {e}")
+        else:
+            print(f"[DEBUG] Settings file does not exist after save attempt")
+            messagebox.showwarning("Settings Warning", "Settings may not have been saved properly. Please check the console for errors.")
+        
+        settings_window.destroy()
+    
+    def reset_settings():
+        """Reset settings to defaults"""
+        if messagebox.askyesno("Reset Settings", "Are you sure you want to reset all settings to defaults?"):
+            # Reset to defaults
+            settings['tts_enabled'] = True
+            settings['clipboard_monitoring'] = True
+            settings['auto_speak'] = True
+            settings['speech_rate'] = 150
+            settings['voice_name'] = 'zira'
+            settings['volume'] = 1.0
+            settings['show_ipa'] = True
+            
+            # Update UI
+            tts_enabled_var.set(True)
+            clipboard_enabled_var.set(True)
+            auto_speak_var.set(True)
+            rate_var.set(150)
+            volume_var.set(1.0)
+            show_ipa_var.set(True)
+            
+            # Reset voice selection
+            current_voice_name = None
+            for voice_name in available_voices:
+                if 'zira' in voice_name.lower():
+                    current_voice_name = voice_name
+                    break
+            if not current_voice_name and available_voices:
+                current_voice_name = available_voices[0]
+            voice_var.set(current_voice_name if current_voice_name else "")
+            
+            # Save to file
+            save_settings_to_file()
+            
+            messagebox.showinfo("Settings Reset", "Settings have been reset to defaults!")
+    
+    def cancel_settings():
+        settings_window.destroy()
+    
+    save_btn = tk.Button(button_container, text="💾 Save", font=("Segoe UI", 13, "bold"),
+                        bg="#1a73e8", fg="white", command=save_settings,
+                        relief="flat", padx=35, pady=12, cursor="hand2",
+                        activebackground="#1761b0", activeforeground="white",
+                        width=12, height=1)
+    save_btn.pack(side="left", padx=(0, 15))
+    
+
+    
+    cancel_btn = tk.Button(button_container, text="Cancel", font=("Segoe UI", 13),
+                          bg="#e0e0e0", fg="#333", command=cancel_settings,
+                          relief="flat", padx=35, pady=12, cursor="hand2",
+                          activebackground="#bdbdbd", activeforeground="#333",
+                          width=12, height=1)
+    cancel_btn.pack(side="left")
+
+def show_about():
+    """Show about dialog"""
+    about_window = tk.Toplevel(root)
+    about_window.title("About")
+    about_window.geometry("400x300")
+    about_window.resizable(False, False)
+    about_window.configure(bg="#f5f5f5")
+    about_window.transient(root)
+    about_window.grab_set()
+    
+    # Center the window
+    about_window.update_idletasks()
+    x = (about_window.winfo_screenwidth() // 2) - (400 // 2)
+    y = (about_window.winfo_screenheight() // 2) - (300 // 2)
+    about_window.geometry(f"400x300+{x}+{y}")
+    
+    # Content
+    tk.Label(about_window, text="TTS Pronunciation Practice", font=("Segoe UI", 16, "bold"), 
+            bg="#f5f5f5", fg="#333").pack(pady=(30, 10))
+    
+    tk.Label(about_window, text=f"Version {CURRENT_VERSION}", font=("Segoe UI", 12), 
+            bg="#f5f5f5", fg="#666").pack(pady=(0, 20))
+    
+    tk.Label(about_window, text="A tool for practicing English pronunciation\nwith text-to-speech and IPA display.", 
+            font=("Segoe UI", 11), bg="#f5f5f5", fg="#333", justify="center").pack(pady=(0, 20))
+    
+    tk.Label(about_window, text="Created by Yamin", font=("Segoe UI", 10), 
+            bg="#f5f5f5", fg="#666").pack(pady=(0, 20))
+    
+    # Close button
+    close_btn = tk.Button(about_window, text="Close", font=("Segoe UI", 12),
+                         bg="#1a73e8", fg="white", command=about_window.destroy,
+                         relief="flat", padx=20, pady=8)
+    close_btn.pack()
+
+def show_update_status():
+    """Show update status in a separate window"""
+    update_window = tk.Toplevel(root)
+    update_window.title("Check for Updates")
+    update_window.geometry("500x400")
+    update_window.resizable(False, False)
+    update_window.configure(bg="#f5f5f5")
+    update_window.transient(root)
+    update_window.grab_set()
+    
+    # Center the window
+    update_window.update_idletasks()
+    x = (update_window.winfo_screenwidth() // 2) - (500 // 2)
+    y = (update_window.winfo_screenheight() // 2) - (400 // 2)
+    update_window.geometry(f"500x400+{x}+{y}")
+    
+    # Header
+    header = tk.Label(update_window, text="🔄 Check for Updates", font=("Segoe UI", 16, "bold"), 
+                     bg="#f5f5f5", fg="#333")
+    header.pack(pady=(20, 10))
+    
+    # Status label
+    status_label = tk.Label(update_window, text="Checking for updates...", font=("Segoe UI", 12), 
+                           bg="#f5f5f5", fg="#666")
+    status_label.pack(pady=(10, 20))
+    
+    # Content frame
+    content_frame = tk.Frame(update_window, bg="#f5f5f5")
+    content_frame.pack(fill="both", expand=True, padx=20, pady=10)
+    
+    # Text widget for update information
+    text_widget = tk.Text(content_frame, height=15, wrap="word", font=("Segoe UI", 10),
+                         bg="white", fg="#333", relief="solid", bd=1, state="disabled")
+    scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=text_widget.yview)
+    text_widget.configure(yscrollcommand=scrollbar.set)
+    
+    text_widget.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Button frame
+    button_frame = tk.Frame(update_window, bg="#f5f5f5")
+    button_frame.pack(pady=20)
+    
+    # Store update info for download button
+    current_update_info = [None]
+    
+    def check_updates():
+        """Check for updates and display results"""
+        status_label.config(text="Checking for updates...", fg="#1a73e8")
+        text_widget.config(state="normal")
+        text_widget.delete(1.0, tk.END)
+        text_widget.config(state="disabled")
+        
+        def update_checker():
+            try:
+                update_info = check_for_updates()
+                current_update_info[0] = update_info  # Store for download button
+                
+                if update_info:
+                    # Update available
+                    root.after(0, lambda: status_label.config(text="Update Available!", fg="#34a853"))
+                    root.after(0, lambda: text_widget.config(state="normal"))
+                    root.after(0, lambda: text_widget.delete(1.0, tk.END))
+                    root.after(0, lambda: text_widget.insert(1.0, f"New version available: {update_info['version']}\n\n"))
+                    root.after(0, lambda: text_widget.insert(tk.END, f"Current version: {CURRENT_VERSION}\n\n"))
+                    root.after(0, lambda: text_widget.insert(tk.END, "What's new:\n"))
+                    root.after(0, lambda: text_widget.insert(tk.END, update_info.get('body', 'No release notes available.')))
+                    root.after(0, lambda: text_widget.config(state="disabled"))
+                    
+                    # Show download button
+                    download_btn.config(state="normal")
+                else:
+                    # No update available
+                    root.after(0, lambda: status_label.config(text="No updates available", fg="#666"))
+                    root.after(0, lambda: text_widget.config(state="normal"))
+                    root.after(0, lambda: text_widget.delete(1.0, tk.END))
+                    root.after(0, lambda: text_widget.insert(1.0, f"You are using the latest version: {CURRENT_VERSION}\n\n"))
+                    root.after(0, lambda: text_widget.insert(tk.END, "No updates are currently available."))
+                    root.after(0, lambda: text_widget.config(state="disabled"))
+                    
+                    # Hide download button
+                    download_btn.config(state="disabled")
+            except Exception as e:
+                root.after(0, lambda: status_label.config(text="Error checking for updates", fg="#d32f2f"))
+                root.after(0, lambda: text_widget.config(state="normal"))
+                root.after(0, lambda: text_widget.delete(1.0, tk.END))
+                root.after(0, lambda: text_widget.insert(1.0, f"Error checking for updates:\n{str(e)}"))
+                root.after(0, lambda: text_widget.config(state="disabled"))
+                root.after(0, lambda: download_btn.config(state="disabled"))
+        
+        threading.Thread(target=update_checker, daemon=True).start()
+    
+    def download_update():
+        """Open download link"""
+        if current_update_info[0]:
+            import webbrowser
+            webbrowser.open(current_update_info[0]['url'])
+    
+    def close_window():
+        update_window.destroy()
+    
+    # Buttons
+    check_btn = tk.Button(button_frame, text="🔄 Check Again", font=("Segoe UI", 12, "bold"),
+                         bg="#1a73e8", fg="white", command=check_updates,
+                         relief="flat", padx=20, pady=8)
+    check_btn.pack(side="left", padx=(0, 10))
+    
+    download_btn = tk.Button(button_frame, text="📥 Download", font=("Segoe UI", 12),
+                            bg="#34a853", fg="white", command=download_update,
+                            relief="flat", padx=20, pady=8, state="disabled")
+    download_btn.pack(side="left", padx=(0, 10))
+    
+    close_btn = tk.Button(button_frame, text="Close", font=("Segoe UI", 12),
+                         bg="#e0e0e0", fg="#333", command=close_window,
+                         relief="flat", padx=20, pady=8)
+    close_btn.pack(side="left")
+    
+    # Start checking for updates immediately
+    check_updates()
+
+def create_menu_bar():
+    """Create the top menu bar"""
+    menubar = tk.Menu(root)
+    root.config(menu=menubar)
+    
+    # File Menu
+    file_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="File", menu=file_menu)
+    file_menu.add_command(label="Clear History", command=clear_history)
+    file_menu.add_separator()
+    file_menu.add_command(label="Exit", command=on_closing)
+    
+    # Edit Menu
+    edit_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="Edit", menu=edit_menu)
+    edit_menu.add_command(label="Clear Entry", command=clear_entry)
+    edit_menu.add_command(label="Copy IPA", command=lambda: pyperclip.copy(ipa_label.cget("text")))
+    
+    # Settings Menu
+    settings_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="Settings", menu=settings_menu)
+    settings_menu.add_command(label="Preferences", command=show_settings)
+    
+    # Help Menu
+    help_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="Help", menu=help_menu)
+    help_menu.add_command(label="Check for Updates", command=show_update_status)
+    help_menu.add_separator()
+    help_menu.add_command(label="About", command=show_about)
+
 # GUI Setup
 root = tk.Tk()
 root.title("TTS Pronunciation Practice")
-root.geometry("650x540")  # Reduced height from 580 to 540 since footer is smaller
+root.geometry("650x500")  # Optimized size for perfect fit
 root.resizable(False, False)
 root.configure(bg="#f5f5f5")
+
+# Create menu bar
+create_menu_bar()
 
 # Set the main window icon as well
 try:
@@ -665,55 +1225,78 @@ def update_history_ui():
     history_canvas.bind('<Configure>', lambda e: resize_buttons())
     resize_buttons()
 
-# --- Footer with Update Button ---
-# Add separator before footer
-footer_separator = ttk.Separator(root, orient='horizontal')
-footer_separator.pack(fill='x', pady=(10, 0))  # Reduced padding
-
-footer_frame = tk.Frame(root, bg="#f8f9fa", relief="flat", bd=1)
-footer_frame.pack(side="bottom", fill="x", pady=(0, 0))
-
-# Create a container for the update button and status
-update_container = tk.Frame(footer_frame, bg="#f8f9fa", height=70)  # Increased height from 60 to 70
-update_container.pack(fill="x", padx=20, pady=15)  # Increased padding from 12 to 15
-update_container.pack_propagate(False)  # Maintain fixed height
-
-def manual_update_check():
-    """Manual update check triggered by button"""
-    print("[DEBUG] Update button clicked!")  # Debug output
-    print("[DEBUG] Starting manual update check...")  # Debug output
-    check_updates_in_background()
-    # Show a brief message
-    update_status.config(text="Checking for updates...", fg="#1a73e8")
-    print("[DEBUG] Status message set to 'Checking for updates...'")  # Debug output
-    root.after(3000, lambda: update_status.config(text="", fg="#1a73e8"))
-
-# Update button with smaller, thinner styling
-update_btn = tk.Button(update_container, text="🔄 Check for Updates", 
-                      font=("Segoe UI", 9, "bold"),  # Reduced font size
-                      bg="#34a853", fg="white", 
-                      command=manual_update_check,
-                      relief="flat", padx=12, pady=3,  # Reduced padding for thinner look
-                      cursor="hand2",
-                      activebackground="#2d8a47",
-                      activeforeground="white")
-update_btn.pack(pady=(0, 6))  # Reduced padding
-
-# Status label with more space
-update_status = tk.Label(update_container, text="", 
-                        font=("Segoe UI", 8),  # Reduced font size
-                        bg="#f8f9fa", fg="#1a73e8",
-                        wraplength=400,  # Allow text wrapping
-                        justify="center")
-update_status.pack(pady=(0, 3))  # Reduced padding
-
 # Setup system tray and clipboard monitoring
 root.protocol("WM_DELETE_WINDOW", on_closing)
 setup_tray()
 clipboard_thread = threading.Thread(target=clipboard_monitor, daemon=True)
 clipboard_thread.start()
 
-# Check for updates on startup (after a short delay)
-root.after(2000, check_updates_in_background)
+def speak_with_subprocess(text):
+    """Use subprocess to run TTS in complete isolation"""
+    global current_subprocess
+    
+    try:
+        # Create a temporary Python script for TTS
+        script_content = f'''
+import pyttsx3
+import sys
+import time
+
+try:
+    engine = pyttsx3.init()
+    engine.setProperty('rate', {settings['speech_rate']})
+    engine.setProperty('volume', {settings['volume']})
+    
+    # Set voice
+    voices = engine.getProperty('voices')
+    for voice in voices:
+        if "{settings['voice_name'].lower()}" in voice.name.lower():
+            engine.setProperty('voice', voice.id)
+            break
+    
+    engine.say("{text}")
+    engine.runAndWait()
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    sys.exit(1)
+'''
+        
+        # Write script to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            script_path = f.name
+        
+        # Run the script without capturing output (so it can be stopped)
+        current_subprocess = subprocess.Popen([sys.executable, script_path], 
+                                            stdout=subprocess.DEVNULL, 
+                                            stderr=subprocess.DEVNULL)
+        
+        # Wait for completion or until stopped - check more frequently
+        while current_subprocess.poll() is None and is_speaking:
+            time.sleep(0.05)  # Check every 50ms instead of 100ms
+        
+        # Clean up
+        try:
+            os.unlink(script_path)
+        except:
+            pass
+        
+        if current_subprocess.poll() is None:
+            # Still running, terminate it
+            current_subprocess.terminate()
+            current_subprocess.wait(timeout=0.5)
+            return False
+        elif current_subprocess.returncode == 0:
+            return True
+        else:
+            return False
+            
+    except Exception as e:
+        if root:
+            root.after(0, lambda: ipa_label.config(text=f"TTS Error: {str(e)[:30]}...", fg="red"))
+        return False
+    finally:
+        current_subprocess = None
 
 root.mainloop()
