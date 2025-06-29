@@ -187,7 +187,7 @@ current_subprocess = None  # Track current subprocess for stopping
 REPO_OWNER = "needyamin"
 REPO_NAME = "tts-pronunciation-practice"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-CURRENT_VERSION = "1.0.0"  # Update as needed
+CURRENT_VERSION = "1.0.1"  # Update as needed
 UPDATE_CHECK_FILE = Path(".update_check")
 
 def compare_versions(v1, v2):
