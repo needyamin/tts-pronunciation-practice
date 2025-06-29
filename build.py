@@ -132,11 +132,36 @@ a = Analysis(
         'threading',
         'time',
         're',
+        'json',
+        'pathlib',
+        'urllib.request',
+        'requests',
+        'pystray',
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'PIL.ImageFont',
+        'socket',
+        'psutil',
+        'subprocess',
+        'tempfile',
+        'platform',
+        'pkg_resources',
+        'setuptools',
+        'distutils',
+        'encodings',
+        'codecs',
+        'locale',
+        'os',
+        'sys',
+        'gc',
     ],
-    hookspath=[],
+    hookspath=['.'],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'multiprocessing',
+        'concurrent.futures',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -188,30 +213,11 @@ def build_executable():
     if os.path.exists('dist'):
         shutil.rmtree('dist')
     
-    # Build command
+    # Build using comprehensive spec file
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--onefile",                    # Single executable file
-        "--windowed",                   # No console window
-        "--name=TTS_Pronunciation_Practice",  # Executable name
-        "--add-data=cmudict-0.7b-ipa.txt;.",  # Include IPA dictionary
-        "--hidden-import=pyttsx3.drivers",
-        "--hidden-import=pyttsx3.drivers.sapi5",
-        "--hidden-import=pyttsx3.drivers.nsss",
-        "--hidden-import=pyttsx3.drivers.espeak",
-        "--hidden-import=pystray._util_win32",
-        "--hidden-import=PIL._tkinter_finder",
-        "--hidden-import=eng_to_ipa",
-        "--hidden-import=pyperclip",
-        "--hidden-import=threading",
-        "--hidden-import=time",
-        "--hidden-import=re",
-        "speak.py"
+        "speak_comprehensive.spec"
     ]
-    
-    # Add icon if exists
-    if os.path.exists('y_icon_temp.ico'):
-        cmd.extend(["--icon=y_icon_temp.ico"])
     
     try:
         subprocess.check_call(cmd)
