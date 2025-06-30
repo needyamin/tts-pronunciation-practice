@@ -370,7 +370,7 @@ engine_in_use = False
 REPO_OWNER = "needyamin"
 REPO_NAME = "tts-pronunciation-practice"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-CURRENT_VERSION = "1.0.0"  # Update as needed
+CURRENT_VERSION = "1.0.10"  # Update as needed
 UPDATE_CHECK_FILE = Path(".update_check")
 
 def compare_versions(v1, v2):
