@@ -1,6 +1,6 @@
 # TTS Pronunciation Practice
 
-A desktop application for practicing English pronunciation with text-to-speech and IPA (International Phonetic Alphabet) display. Features automatic clipboard monitoring, system tray integration, and a comprehensive IPA dictionary.
+A desktop application for practicing English pronunciation with text-to-speech and IPA (International Phonetic Alphabet) display. Features automatic clipboard monitoring, system tray integration, a comprehensive IPA dictionary, and auto-update.
 
 **GitHub Repository**: [https://github.com/needyamin/tts-pronunciation-practice](https://github.com/needyamin/tts-pronunciation-practice)
 
@@ -20,6 +20,7 @@ A desktop application for practicing English pronunciation with text-to-speech a
 - **Instant Stop Control**: Stop button responds immediately and terminates speech instantly
 - **Auto-Clean Text**: Automatically removes formatting and extra spaces
 - **Auto-Update System**: Automatic and manual update checks with GitHub integration
+- **Auto Start on Windows Login**: Enable/disable from Settings to launch the app automatically when Windows starts
 
 ## Screenshots
 
@@ -112,211 +113,63 @@ See the [Building Executable](#building-executable) section for detailed instruc
 - **requests**: HTTP requests for auto-update functionality
 - **pyinstaller**: For building executable (development)
 - **tkinter**: GUI framework (included with Python)
+- **pywin32**: For Windows auto-start shortcut (Windows only)
 
 ## File Structure
 
 ```
 tts-pronunciation-practice/
-├── speak.py              # Main application
-├── requirements.txt      # Python dependencies
-├── README.md            # This file
-├── build.py             # Build script for executable
-├── LICENSE              # GPL-3.0 license
-├── cmudict-0.7b-ipa.txt # Large IPA dictionary (auto-downloaded)
-├── y_icon_temp.ico      # Application icon (auto-generated)
-├── setup.iss            # Inno Setup script (auto-generated)
-├── portable/            # Portable build output
-│   └── TTS_Pronunciation_Practice.exe
-├── dist/                # PyInstaller build output
-│   └── TTS_Pronunciation_Practice.exe
-└── installer/           # Installer build output
-    └── TTS_Pronunciation_Practice_Setup.exe
+├── speak.py                  # Main application
+├── build.py                  # Build script for executable
+├── LICENSE                   # GPL-3.0 license
+├── README.md                 # This file
+├── asset/
+│   ├── cmudict-0.7b-ipa.txt  # Large IPA dictionary (auto-downloaded)
+│   ├── settings.json          # User settings
+│   ├── requirements.txt       # Python dependencies
+│   ├── y_icon_temp.ico        # Application icon (auto-generated)
+│   └── github_profile.png     # Profile image for About dialog
+├── build_exe/
+│   ├── dist/
+│   │   └── TTS_Pronunciation_Practice.exe      # Portable EXE build
+│   ├── build_exe/
+│   │   └── installer/
+│   │       └── TTS_Pronunciation_Practice_Setup.exe  # Installer EXE
+│   ├── setup.iss             # Inno Setup script
+│   ├── speak.spec            # PyInstaller spec file
+│   └── ...                   # Other build artifacts
+└── .update_check             # (Optional) Update check timestamp
 ```
 
 ## How It Works
 
-1. **IPA Dictionary**: The app downloads a comprehensive CMU dictionary with 170,000+ English words and their IPA transcriptions
+1. **IPA Dictionary**: The app uses a comprehensive CMU dictionary with 170,000+ English words and their IPA transcriptions
 2. **Multiple Sources**: For words not in the main dictionary, it checks custom corrections and falls back to the eng-to-ipa library
 3. **Text-to-Speech**: Uses pyttsx3 with Microsoft Zira voice (if available) for clear pronunciation
 4. **Subprocess Isolation**: Each TTS session runs in a separate Python process for complete isolation and reliability
 5. **Background Operation**: Runs in system tray with ultra-fast clipboard monitoring for seamless workflow
 6. **Instant Stop**: Subprocess-based approach allows immediate termination of speech with no lingering state issues
+7. **Auto Start**: Optionally launches automatically on Windows login (enable in Settings)
 
 ## Auto-Update System
 
-The application includes a comprehensive auto-update system:
-
-### Automatic Updates
-- **Startup Check**: Automatically checks for updates 2 seconds after application launch
-- **Rate Limiting**: Only checks once per hour to avoid excessive API calls
-- **Background Processing**: Update checks run in background threads without blocking the UI
-
-### Manual Updates
-- **Update Button**: Click "🔄 Check for Updates" in the main interface
-- **System Tray**: Right-click tray icon and select "Check for Updates"
-- **Status Feedback**: Shows "Checking for updates..." message during manual checks
-
-### Update Dialog
-When an update is available, a beautiful dialog appears with:
-- **Version Comparison**: Shows current vs. new version
-- **Release Notes**: Scrollable text with detailed update information
-- **Download Options**: Direct link to GitHub release page
-- **Skip Option**: Choose to skip the update for now
-
-### Configuration
-The update system is configured via constants in `speak.py`:
-```python
-REPO_OWNER = "needyamin"
-REPO_NAME = "tts-pronunciation-practice"
-CURRENT_VERSION = "1.0.0"  # Update this when releasing new versions
-```
-
-### GitHub Integration
-- **API Endpoint**: Uses GitHub Releases API for version checking
-- **Release Tags**: Expects version tags in format `v1.0.1`, `v1.1.0`, etc.
-- **Release Notes**: Displays the release body text in the update dialog
-- **Download Links**: Provides direct links to GitHub release pages
+- **Startup Check**: Automatically checks for updates after application launch
+- **Manual Updates**: Click "Check for Updates" in the Help menu
+- **Update Dialog**: Shows current vs. new version, release notes, and download/install options
+- **Silent/Automatic Update**: Optionally downloads and installs the latest version automatically
 
 ## Building Executable
 
-### Quick Build (Recommended)
-
-```bash
-python build.py
-```
-
-This will:
-- **Automatically install all requirements** from requirements.txt
-- **Install PyInstaller** if needed
-- **Download the IPA dictionary** if not present
-- **Ask for build type**: Portable or Installer
-- **Create standalone executable** and/or professional installer
-
-### Build Options
-
-When you run `python build.py`, you'll be prompted to choose:
-
-#### Option 1: Portable Executable
-- Creates a standalone `.exe` file
-- No installation required
-- Ready to run immediately
-- Output: `portable/TTS_Pronunciation_Practice.exe`
-
-#### Option 2: Professional Installer
-- Creates both portable `.exe` and professional installer
-- Requires Inno Setup 6 (automatically detected)
-- Modern Windows installation wizard
-- Desktop shortcuts, Start Menu integration
-- Output: 
-  - `dist/TTS_Pronunciation_Practice.exe` (portable)
-  - `installer/TTS_Pronunciation_Practice_Setup.exe` (installer)
-
-### Inno Setup Installation
-
-For the professional installer option, you'll need Inno Setup 6:
-
-1. **Download Inno Setup 6**: [https://jrsoftware.org/isinfo.php](https://jrsoftware.org/isinfo.php)
-2. **Install Inno Setup 6** on your system
-3. **Run the build script again**: `python build.py`
-
-The build script will automatically detect Inno Setup and create a professional installer.
-
-### Manual Build (Advanced)
-
-If you prefer manual control:
-
-```bash
-# Install requirements manually
-pip install -r requirements.txt
-
-# Install PyInstaller
-pip install pyinstaller
-
-# Build executable
-pyinstaller --onefile --windowed --name=TTS_Pronunciation_Practice speak.py
-```
-
-## Customization
-
-### Adding Custom IPA Pronunciations
-
-Edit the `CUSTOM_IPA` dictionary in `speak.py`:
-
-```python
-CUSTOM_IPA = {
-    "yamin": "jɑːˈmiːn",
-    "million": "ˈmɪl.jən",
-    "billion": "ˈbɪl.jən",
-    "yourword": "ˈjɔːr.wɜːrd"
-}
-```
-
-### Voice Settings
-
-Modify voice properties in the code:
-
-```python
-engine.setProperty('rate', 150)  # Speed (words per minute)
-# Change voice selection logic for different voices
-```
-
-### Version Management
-
-To release a new version:
-
-1. **Update Version Number**: Change `CURRENT_VERSION` in `speak.py`:
-   ```python
-   CURRENT_VERSION = "1.0.1"  # Increment version number
-   ```
-
-2. **Create GitHub Release**: 
-   - Tag the release with version (e.g., `v1.0.1`)
-   - Add release notes in the description
-   - Upload the new executable files
-
-3. **Build New Executable**: Run `python build.py` to create updated executables
-
-The auto-update system will automatically detect the new version and notify users.
+- Run `python build.py` to build a portable EXE and/or installer
+- Output EXE: `build_exe/dist/TTS_Pronunciation_Practice.exe`
+- Output Installer: `build_exe/build_exe/installer/TTS_Pronunciation_Practice_Setup.exe`
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **No sound**: Check your system's audio settings and ensure pyttsx3 is properly installed
-2. **Missing IPA**: Some words may not have IPA transcriptions available
-3. **Clipboard not working**: Ensure pyperclip is installed and clipboard access is allowed
-4. **System tray not showing**: Check if pystray is properly installed
-5. **Multiple tray icons**: The app now ensures only one tray icon exists
-
-### Voice Issues
-
-If the default voice doesn't work well:
-- The app tries to use Microsoft Zira voice
-- You can modify the voice selection logic in the code
-- Different systems may have different available voices
-
-### Debug Mode
-
-The application includes debug output to help troubleshoot issues:
-- Check console output for `[DEBUG]` messages
-- These show clipboard detection, word processing, and speech status
-
-## Development
-
-### Adding Features
-
-The code is well-structured and modular. Key areas for extension:
-- `speak_text()`: Main pronunciation logic
-- `clipboard_monitor()`: Clipboard detection
-- `setup_tray()`: System tray functionality
-- `update_history_ui()`: History display
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+- **No sound**: Check your system's audio settings and ensure pyttsx3 is properly installed
+- **Clipboard not working**: Ensure pyperclip is installed and clipboard access is allowed
+- **System tray not showing**: Check if pystray is properly installed
+- **Auto start not working**: Ensure pywin32 is installed and you have permission to create shortcuts
 
 ## License
 
