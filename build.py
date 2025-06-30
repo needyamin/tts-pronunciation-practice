@@ -12,6 +12,8 @@ import shutil
 import urllib.request
 from pathlib import Path
 
+BUILD_DIR = 'build_exe'
+
 def get_user_choice():
     """Get user choice for build type"""
     print("TTS Pronunciation Practice - Build Options")
@@ -34,16 +36,16 @@ def get_user_choice():
             sys.exit(0)
 
 def install_requirements():
-    """Install all requirements from requirements.txt"""
+    """Install all requirements from asset/requirements.txt"""
     print("Installing requirements...")
+    req_path = os.path.join('asset', 'requirements.txt')
     try:
         # Check if requirements.txt exists
-        if not os.path.exists('requirements.txt'):
-            print("✗ requirements.txt not found")
+        if not os.path.exists(req_path):
+            print("✗ requirements.txt not found in asset/")
             return False
-        
         # Install requirements
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_path])
         print("✓ All requirements installed successfully")
         return True
     except subprocess.CalledProcessError as e:
@@ -87,10 +89,9 @@ def check_inno_setup():
     return None
 
 def download_ipa_dict():
-    """Download the IPA dictionary if not present"""
-    ipa_dict_path = "cmudict-0.7b-ipa.txt"
+    """Download the IPA dictionary if not present in asset/"""
+    ipa_dict_path = os.path.join('asset', 'cmudict-0.7b-ipa.txt')
     ipa_dict_url = "https://raw.githubusercontent.com/menelik3/cmudict-ipa/master/cmudict-0.7b-ipa.txt"
-    
     if not os.path.exists(ipa_dict_path):
         print("Downloading IPA dictionary...")
         try:
@@ -100,22 +101,29 @@ def download_ipa_dict():
             print(f"✗ Failed to download IPA dictionary: {e}")
             return False
     else:
-        print("✓ IPA dictionary already exists")
+        print("✓ IPA dictionary already exists in asset/")
     return True
 
 def create_spec_file():
-    """Create a PyInstaller spec file for the application"""
+    """Create a PyInstaller spec file for the application inside build_exe/ directory, referencing asset/ files"""
+    build_dir = BUILD_DIR
+    os.makedirs(build_dir, exist_ok=True)
+    spec_path = os.path.join(build_dir, 'speak.spec')
     spec_content = '''# -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
 a = Analysis(
-    ['speak.py'],
-    pathex=[],
+    ['../speak.py'],
+    pathex=['..'],
     binaries=[],
     datas=[
-        ('cmudict-0.7b-ipa.txt', '.'),
-        ('y_icon_temp.ico', '.') if os.path.exists('y_icon_temp.ico') else None,
+        ('../asset/cmudict-0.7b-ipa.txt', '.'),
+        ('../asset/y_icon_temp.ico', '.') if os.path.exists('../asset/y_icon_temp.ico') else None,
+        ('../asset/settings.json', '.'),
+        ('../asset/requirements.txt', '.'),
+        ('../README.md', '.'),
+        ('../LICENSE', '.'),
     ],
     hiddenimports=[
         'pyttsx3.drivers',
@@ -132,11 +140,36 @@ a = Analysis(
         'threading',
         'time',
         're',
+        'json',
+        'pathlib',
+        'urllib.request',
+        'requests',
+        'pystray',
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'PIL.ImageFont',
+        'socket',
+        'psutil',
+        'subprocess',
+        'tempfile',
+        'platform',
+        'pkg_resources',
+        'setuptools',
+        'distutils',
+        'encodings',
+        'codecs',
+        'locale',
+        'os',
+        'sys',
+        'gc',
     ],
-    hookspath=[],
+    hookspath=['..'],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'multiprocessing',
+        'concurrent.futures',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -165,54 +198,32 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='y_icon_temp.ico' if os.path.exists('y_icon_temp.ico') else None,
+    icon='../asset/y_icon_temp.ico' if os.path.exists('../asset/y_icon_temp.ico') else None,
 )
 '''
-    
     # Clean up None entries from datas
-    spec_content = spec_content.replace("('y_icon_temp.ico', '.') if os.path.exists('y_icon_temp.ico') else None,", "")
-    spec_content = spec_content.replace("icon='y_icon_temp.ico' if os.path.exists('y_icon_temp.ico') else None,", "")
-    
-    with open('speak.spec', 'w', encoding='utf-8') as f:
+    spec_content = spec_content.replace("('../asset/y_icon_temp.ico', '.') if os.path.exists('../asset/y_icon_temp.ico') else None,", "")
+    spec_content = spec_content.replace("icon='../asset/y_icon_temp.ico' if os.path.exists('../asset/y_icon_temp.ico') else None,", "")
+    with open(spec_path, 'w', encoding='utf-8') as f:
         f.write(spec_content)
-    
-    print("✓ PyInstaller spec file created")
+    print(f"✓ PyInstaller spec file created at {spec_path}")
 
 def build_executable():
-    """Build the executable using PyInstaller"""
+    """Build the executable using PyInstaller, using build_exe/speak.spec and outputting to build_exe/"""
     print("Building executable...")
-    
+    build_dir = BUILD_DIR
     # Clean previous builds
-    if os.path.exists('build'):
-        shutil.rmtree('build')
-    if os.path.exists('dist'):
-        shutil.rmtree('dist')
-    
-    # Build command
+    if os.path.exists(os.path.join(build_dir, 'build')):
+        shutil.rmtree(os.path.join(build_dir, 'build'))
+    if os.path.exists(os.path.join(build_dir, 'dist')):
+        shutil.rmtree(os.path.join(build_dir, 'dist'))
+    # Build using the spec file in build_exe/ and output to build_exe/
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--onefile",                    # Single executable file
-        "--windowed",                   # No console window
-        "--name=TTS_Pronunciation_Practice",  # Executable name
-        "--add-data=cmudict-0.7b-ipa.txt;.",  # Include IPA dictionary
-        "--hidden-import=pyttsx3.drivers",
-        "--hidden-import=pyttsx3.drivers.sapi5",
-        "--hidden-import=pyttsx3.drivers.nsss",
-        "--hidden-import=pyttsx3.drivers.espeak",
-        "--hidden-import=pystray._util_win32",
-        "--hidden-import=PIL._tkinter_finder",
-        "--hidden-import=eng_to_ipa",
-        "--hidden-import=pyperclip",
-        "--hidden-import=threading",
-        "--hidden-import=time",
-        "--hidden-import=re",
-        "speak.py"
+        os.path.join(build_dir, "speak.spec"),
+        "--distpath", os.path.join(build_dir, "dist"),
+        "--workpath", os.path.join(build_dir, "build")
     ]
-    
-    # Add icon if exists
-    if os.path.exists('y_icon_temp.ico'):
-        cmd.extend(["--icon=y_icon_temp.ico"])
-    
     try:
         subprocess.check_call(cmd)
         print("✓ Executable built successfully!")
@@ -222,10 +233,15 @@ def build_executable():
         return False
 
 def create_inno_setup_script():
-    """Create Inno Setup script for installer"""
+    """Create Inno Setup script for installer inside build_exe/ directory, referencing asset/ files"""
+    build_dir = BUILD_DIR
+    os.makedirs(build_dir, exist_ok=True)
+    iss_path = os.path.join(build_dir, 'setup.iss')
     # Check if LICENSE file exists
-    license_line = "LicenseFile=LICENSE" if os.path.exists("LICENSE") else ";LicenseFile=LICENSE  ; License file not found"
-    
+    license_line = "LicenseFile=../LICENSE" if os.path.exists(os.path.join("asset", "LICENSE")) else ";LicenseFile=../LICENSE  ; License file not found"
+    # Use absolute path for exe source
+    exe_source = os.path.abspath(os.path.join(build_dir, 'dist', 'TTS_Pronunciation_Practice.exe'))
+    icon_path = os.path.join('..', 'asset', 'y_icon_temp.ico')
     inno_script = f'''[Setup]
 AppName=TTS Pronunciation Practice
 AppVersion=1.0
@@ -237,9 +253,9 @@ DefaultDirName={{autopf}}\\TTS Pronunciation Practice
 DefaultGroupName=TTS Pronunciation Practice
 AllowNoIcons=yes
 {license_line}
-OutputDir=installer
+OutputDir=build_exe\\installer
 OutputBaseFilename=TTS_Pronunciation_Practice_Setup
-SetupIconFile=y_icon_temp.ico
+SetupIconFile={icon_path}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -253,9 +269,13 @@ Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: 
 Name: "quicklaunchicon"; Description: "{{cm:CreateQuickLaunchIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked; OnlyBelowVersion: 6.1; Check: not IsAdminInstallMode
 
 [Files]
-Source: "dist\\TTS_Pronunciation_Practice.exe"; DestDir: "{{app}}"; Flags: ignoreversion
-Source: "cmudict-0.7b-ipa.txt"; DestDir: "{{app}}"; Flags: ignoreversion
-Source: "y_icon_temp.ico"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "{exe_source}"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../asset/cmudict-0.7b-ipa.txt"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../asset/y_icon_temp.ico"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../asset/settings.json"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../asset/requirements.txt"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../README.md"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "../LICENSE"; DestDir: "{{app}}"; Flags: ignoreversion
 
 [Icons]
 Name: "{{group}}\\TTS Pronunciation Practice"; Filename: "{{app}}\\TTS_Pronunciation_Practice.exe"
@@ -272,22 +292,18 @@ begin
   Result := True;
 end;
 '''
-    
-    with open('setup.iss', 'w', encoding='utf-8') as f:
+    with open(iss_path, 'w', encoding='utf-8') as f:
         f.write(inno_script)
-    
-    print("✓ Inno Setup script created")
+    print(f"✓ Inno Setup script created at {iss_path}")
 
 def build_installer(inno_path):
-    """Build installer using Inno Setup"""
+    """Build installer using Inno Setup, using build_exe/setup.iss"""
     print("Building installer...")
-    
-    # Create installer directory
-    if not os.path.exists('installer'):
-        os.makedirs('installer')
-    
+    installer_dir = os.path.join(BUILD_DIR, 'installer')
+    if not os.path.exists(installer_dir):
+        os.makedirs(installer_dir)
     # Build installer
-    cmd = [inno_path, "setup.iss"]
+    cmd = [inno_path, os.path.join(BUILD_DIR, 'setup.iss')]
     try:
         subprocess.check_call(cmd)
         print("✓ Installer built successfully!")
@@ -297,18 +313,20 @@ def build_installer(inno_path):
         return False
 
 def create_portable_package():
-    """Create portable package with executable and dependencies"""
+    """Create portable package with executable and dependencies inside build_exe/portable"""
     print("Creating portable package...")
-    
-    # Create portable directory
-    portable_dir = "portable"
+    portable_dir = os.path.join(BUILD_DIR, 'portable')
     if os.path.exists(portable_dir):
         shutil.rmtree(portable_dir)
     os.makedirs(portable_dir)
-    
     # Copy executable
-    if os.path.exists("dist/TTS_Pronunciation_Practice.exe"):
-        shutil.copy2("dist/TTS_Pronunciation_Practice.exe", portable_dir)
+    exe_path = os.path.join(BUILD_DIR, 'dist', 'TTS_Pronunciation_Practice.exe')
+    if os.path.exists(exe_path):
+        shutil.copy2(exe_path, portable_dir)
+        # Copy icon if it exists
+        icon_src = os.path.join('asset', 'y_icon_temp.ico')
+        if os.path.exists(icon_src):
+            shutil.copy2(icon_src, portable_dir)
         print("✓ Portable executable created")
         return True
     else:
@@ -358,8 +376,8 @@ def main():
                 print("INSTALLER BUILD COMPLETED SUCCESSFULLY!")
                 print("=" * 50)
                 print("\nFiles created:")
-                print("- dist/TTS_Pronunciation_Practice.exe (Portable executable)")
-                print("- installer/TTS_Pronunciation_Practice_Setup.exe (Installer)")
+                print("- build_exe/dist/TTS_Pronunciation_Practice.exe (Portable executable)")
+                print("- build_exe/installer/TTS_Pronunciation_Practice_Setup.exe (Installer)")
                 print("\nTo install:")
                 print("1. Run TTS_Pronunciation_Practice_Setup.exe")
                 print("2. Follow the installation wizard")
@@ -376,7 +394,7 @@ def main():
         print("PORTABLE BUILD COMPLETED SUCCESSFULLY!")
         print("=" * 50)
         print("\nFiles created:")
-        print("- portable/TTS_Pronunciation_Practice.exe (Portable executable)")
+        print("- build_exe/portable/TTS_Pronunciation_Practice.exe (Portable executable)")
         print("\nTo run:")
         print("- Double-click TTS_Pronunciation_Practice.exe")
     

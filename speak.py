@@ -14,11 +14,61 @@ import pyperclip
 import requests
 import json
 from pathlib import Path
-import subprocess
-import tempfile
+
+# Check for multiple instances
+def check_single_instance():
+    """Check if another instance is already running"""
+    import socket
+    try:
+        # Try to bind to a specific port
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('localhost', 12345))  # Use a specific port
+        sock.close()
+        return True  # No other instance running
+    except OSError:
+        # Port is already in use, another instance is running
+        return False
+
+def cleanup_stray_processes():
+    """Clean up any stray TTS-related processes"""
+    try:
+        import psutil
+        current_pid = os.getpid()
+        
+        # Look for other Python processes that might be TTS-related
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if proc.info['pid'] != current_pid:
+                    cmdline = proc.info.get('cmdline', [])
+                    if cmdline and any('speak' in arg.lower() for arg in cmdline):
+                        print(f"Found potential stray process: {proc.info['pid']}")
+                        # Don't kill it automatically, just log it
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except ImportError:
+        # psutil not available, skip this check
+        pass
+    except Exception as e:
+        print(f"Error checking for stray processes: {e}")
+
+# Check if another instance is running
+if not check_single_instance():
+    try:
+        # Try to show a message box
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        messagebox.showwarning("Application Already Running", 
+                              "TTS Pronunciation Practice is already running.\nPlease close the existing instance first.")
+        root.destroy()
+    except:
+        pass
+    sys.exit(1)
+
+# Clean up any stray processes
+cleanup_stray_processes()
 
 # Path to the large IPA dictionary file
-IPA_DICT_PATH = "cmudict-0.7b-ipa.txt"
+IPA_DICT_PATH = os.path.join("asset", "cmudict-0.7b-ipa.txt")
 IPA_DICT_URL = "https://raw.githubusercontent.com/menelik3/cmudict-ipa/master/cmudict-0.7b-ipa.txt"
 
 # Custom IPA dictionary for special/corrected words
@@ -43,13 +93,13 @@ settings = {
 }
 
 # Settings file path
-SETTINGS_FILE = Path("settings.json")
+SETTINGS_FILE = Path(os.path.join("asset", "settings.json"))
 
 def load_settings():
     """Load settings from file"""
     global settings
     try:
-        settings_file = Path("settings.json")
+        settings_file = Path(os.path.join("asset", "settings.json"))
         if settings_file.exists():
             with open(settings_file, 'r', encoding='utf-8') as f:
                 loaded_settings = json.load(f)
@@ -79,13 +129,13 @@ def load_settings():
 def save_settings_to_file():
     """Save settings to file"""
     try:
-        with open("settings.json", 'w', encoding='utf-8') as f:
+        with open(os.path.join("asset", "settings.json"), 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
         
-        print(f"Settings saved to: {Path('settings.json').absolute()}")
+        print(f"Settings saved to: {Path(os.path.join('asset', 'settings.json')).absolute()}")
         
-        if Path("settings.json").exists():
-            file_size = Path("settings.json").stat().st_size
+        if Path(os.path.join("asset", "settings.json")).exists():
+            file_size = Path(os.path.join("asset", "settings.json")).stat().st_size
         else:
             pass
             
@@ -98,8 +148,8 @@ def save_settings_to_file():
             temp_file.close()
             
             import shutil
-            shutil.move(temp_file.name, "settings.json")
-            print(f"Settings saved using alternative method: {Path('settings.json').absolute()}")
+            shutil.move(temp_file.name, os.path.join("asset", "settings.json"))
+            print(f"Settings saved using alternative method: {Path(os.path.join('asset', 'settings.json')).absolute()}")
         except Exception as e2:
             print(f"Alternative save method also failed: {e2}")
 
@@ -107,9 +157,102 @@ def save_settings_to_file():
 load_settings()
 
 # Ensure settings file exists
-if not Path("settings.json").exists():
+if not Path(os.path.join("asset", "settings.json")).exists():
     print("Creating initial settings file...")
     save_settings_to_file()
+
+def cleanup_all_engines():
+    """Clean up all active TTS engines"""
+    global active_engines, current_speech_engine, global_engine, singleton_engine, engine_in_use
+    
+    with engine_lock:
+        # Stop and cleanup all tracked engines
+        for engine in active_engines:
+            try:
+                if engine:
+                    engine.stop()
+            except Exception as e:
+                print(f"Error stopping engine: {e}")
+        
+        # Clean up singleton engine
+        if singleton_engine:
+            try:
+                singleton_engine.stop()
+            except Exception as e:
+                print(f"Error stopping singleton engine: {e}")
+            singleton_engine = None
+            engine_in_use = False
+        
+        # Clear the lists
+        active_engines.clear()
+        current_speech_engine = None
+        global_engine = None
+
+def create_tts_engine():
+    """Create a new TTS engine with proper configuration - Singleton approach"""
+    global singleton_engine, engine_in_use
+    
+    with engine_lock:
+        # If we already have a singleton engine and it's not in use, reuse it
+        if singleton_engine and not engine_in_use:
+            try:
+                # Test if the engine is still working
+                singleton_engine.setProperty('rate', settings['speech_rate'])
+                singleton_engine.setProperty('volume', settings['volume'])
+                engine_in_use = True
+                return singleton_engine
+            except Exception as e:
+                print(f"Singleton engine test failed, creating new one: {e}")
+                # Engine is broken, create a new one
+                try:
+                    singleton_engine.stop()
+                except:
+                    pass
+                singleton_engine = None
+        
+        # Create new engine
+        try:
+            new_engine = pyttsx3.init()
+            
+            # Set properties
+            new_engine.setProperty('rate', settings['speech_rate'])
+            new_engine.setProperty('volume', settings['volume'])
+            
+            # Set voice
+            voices = new_engine.getProperty('voices')
+            if voices:
+                # Try to find the preferred voice
+                voice_found = False
+                for voice in voices:
+                    if settings['voice_name'].lower() in voice.name.lower():
+                        new_engine.setProperty('voice', voice.id)
+                        voice_found = True
+                        break
+                
+                # If preferred voice not found, use the first available
+                if not voice_found:
+                    new_engine.setProperty('voice', voices[0].id)
+            
+            # Set as singleton
+            singleton_engine = new_engine
+            engine_in_use = True
+            
+            # Track this engine
+            active_engines.append(new_engine)
+            
+            return new_engine
+            
+        except Exception as e:
+            print(f"Failed to create TTS engine: {e}")
+            return None
+
+def release_tts_engine(engine):
+    """Release the TTS engine back to the pool"""
+    global engine_in_use
+    
+    with engine_lock:
+        if engine == singleton_engine:
+            engine_in_use = False
 
 def is_valid_english_ipa(s):
     # Only allow strings that are likely to be English IPA
@@ -143,27 +286,39 @@ def load_large_ipa_dict():
 load_large_ipa_dict()
 
 # Initialize pyttsx3
-engine = pyttsx3.init()
+try:
+    # Clean up any existing engines first
+    cleanup_all_engines()
+    
+    engine = pyttsx3.init()
+    
+    # Set voice and rate based on settings
+    # Find the voice by name
+    selected_voice_id = None
+    for voice in engine.getProperty('voices'):
+        if settings['voice_name'].lower() in voice.name.lower():
+            selected_voice_id = voice.id
+            break
 
-# Set voice and rate based on settings
-# Find the voice by name
-selected_voice_id = None
-for voice in engine.getProperty('voices'):
-    if settings['voice_name'].lower() in voice.name.lower():
-        selected_voice_id = voice.id
-        break
+    # If no matching voice found, use the first available
+    if not selected_voice_id:
+        voices = engine.getProperty('voices')
+        if voices:
+            selected_voice_id = voices[0].id
 
-# If no matching voice found, use the first available
-if not selected_voice_id:
-    voices = engine.getProperty('voices')
-    if voices:
-        selected_voice_id = voices[0].id
+    if selected_voice_id:
+        engine.setProperty('voice', selected_voice_id)
 
-if selected_voice_id:
-    engine.setProperty('voice', selected_voice_id)
-
-engine.setProperty('rate', settings['speech_rate'])
-engine.setProperty('volume', settings['volume'])
+    engine.setProperty('rate', settings['speech_rate'])
+    engine.setProperty('volume', settings['volume'])
+    
+    # Set as the main engine
+    singleton_engine = engine
+    active_engines.append(engine)
+    
+except Exception as e:
+    print(f"Failed to initialize TTS engine: {e}")
+    engine = None
 
 # Store history
 history = []
@@ -181,7 +336,12 @@ is_speaking = False
 current_speech_engine = None
 speech_lock = threading.Lock()
 global_engine = None
-current_subprocess = None  # Track current subprocess for stopping
+# Add engine management variables
+engine_lock = threading.Lock()
+active_engines = []  # Track all active engines for cleanup
+# Add singleton engine management
+singleton_engine = None
+engine_in_use = False
 
 # --- Update Check Constants ---
 REPO_OWNER = "needyamin"
@@ -403,6 +563,9 @@ def on_quit(icon, item):
     should_run_clipboard = False
     is_speaking = False
     
+    # Clean up all engines before exiting
+    cleanup_all_engines()
+    
     if tray_icon:
         try:
             tray_icon.visible = False
@@ -437,6 +600,10 @@ def hide_window():
 def on_closing():
     global is_speaking
     is_speaking = False
+    
+    # Clean up all engines when closing
+    cleanup_all_engines()
+    
     hide_window()
 
 def setup_tray():
@@ -508,37 +675,11 @@ def auto_paste_word(word):
                 speak_text()
 
 def stop_speech():
-    global is_speaking, current_speech_engine, speech_thread, global_engine, current_subprocess
+    global is_speaking, current_speech_engine, speech_thread, global_engine
     is_speaking = False
     
-    # Force stop subprocess immediately
-    if current_subprocess:
-        try:
-            current_subprocess.terminate()
-            # Give it a moment to terminate gracefully
-            current_subprocess.wait(timeout=0.5)
-        except Exception:
-            try:
-                # Force kill if terminate didn't work
-                current_subprocess.kill()
-                current_subprocess.wait(timeout=0.5)
-            except Exception:
-                pass
-        current_subprocess = None
-    
-    if current_speech_engine:
-        try:
-            current_speech_engine.stop()
-        except Exception:
-            pass
-        current_speech_engine = None
-    
-    if global_engine:
-        try:
-            global_engine.stop()
-        except Exception:
-            pass
-        global_engine = None
+    # Clean up all engines properly
+    cleanup_all_engines()
     
     speak_btn.config(text="🔊 Speak", bg="#1a73e8")
     stop_btn.grid_remove()
@@ -557,22 +698,19 @@ def stop_speech():
     
     # Reset all state completely
     is_speaking = False
-    current_speech_engine = None
-    global_engine = None
-    current_subprocess = None
 
 def speak_text(event=None):
-    global speech_thread, is_speaking, current_speech_engine, global_engine, current_subprocess
+    global speech_thread, is_speaking, current_speech_engine, global_engine
     
     if not settings['tts_enabled']:
         messagebox.showinfo("TTS Disabled", "Text-to-Speech is currently disabled in settings.")
         return
     
-    # Always reset state before starting
+    # Always clean up any existing engines before starting
+    cleanup_all_engines()
+    
+    # Reset state
     is_speaking = False
-    current_speech_engine = None
-    global_engine = None
-    current_subprocess = None
     
     if speech_thread and speech_thread.is_alive():
         try:
@@ -599,12 +737,12 @@ def speak_text(event=None):
     # Show initializing message
     ipa_label.config(text="Initializing TTS engine...", fg="#ff9800")
     
-    # Use subprocess approach for complete isolation
-    speech_thread = threading.Thread(target=speak_in_thread_subprocess, args=(text,), daemon=True)
+    # Use threading approach for complete isolation
+    speech_thread = threading.Thread(target=speak_in_thread, args=(text,), daemon=True)
     speech_thread.start()
 
-def speak_in_thread_subprocess(text):
-    """Thread function using subprocess approach"""
+def speak_in_thread(text):
+    """Thread function using threading approach"""
     global is_speaking
     
     try:
@@ -618,8 +756,8 @@ def speak_in_thread_subprocess(text):
         if not is_speaking:
             return
         
-        # Use subprocess approach
-        success = speak_with_subprocess(text)
+        # Use threading approach
+        success = speak_with_thread(text)
         
         if not success:
             if root:
@@ -634,6 +772,38 @@ def speak_in_thread_subprocess(text):
         if root:
             root.after(0, lambda: speak_btn.config(text="🔊 Speak", bg="#1a73e8"))
             root.after(0, lambda: stop_btn.grid_remove())
+
+def speak_with_thread(text):
+    """Use threading approach to run TTS in complete isolation"""
+    global current_speech_engine
+    
+    try:
+        # Create a new engine instance using our management system
+        current_speech_engine = create_tts_engine()
+        
+        if not current_speech_engine:
+            return False
+        
+        # Check if we should still speak before starting
+        if not is_speaking:
+            return False
+        
+        # Speak the text
+        current_speech_engine.say(text)
+        current_speech_engine.runAndWait()
+        return True
+        
+    except Exception as e:
+        error_msg = f"TTS Error: {str(e)[:50]}..."
+        print(f"TTS Error: {e}")
+        if root:
+            root.after(0, lambda: ipa_label.config(text=error_msg, fg="red"))
+        return False
+    finally:
+        # Release the engine back to the pool instead of destroying it
+        if current_speech_engine:
+            release_tts_engine(current_speech_engine)
+        current_speech_engine = None
 
 def show_ipa_for_text(text):
     """Display IPA for the given text"""
@@ -765,10 +935,27 @@ def show_settings():
     # Get available voices with their IDs
     available_voices = []
     voice_id_map = {}
-    for voice in engine.getProperty('voices'):
-        voice_name = voice.name
-        available_voices.append(voice_name)
-        voice_id_map[voice_name] = voice.id
+    
+    try:
+        # Try to get voices from the main engine
+        if engine:
+            for voice in engine.getProperty('voices'):
+                voice_name = voice.name
+                available_voices.append(voice_name)
+                voice_id_map[voice_name] = voice.id
+        else:
+            # If main engine failed, try to create a temporary one
+            temp_engine = pyttsx3.init()
+            for voice in temp_engine.getProperty('voices'):
+                voice_name = voice.name
+                available_voices.append(voice_name)
+                voice_id_map[voice_name] = voice.id
+            temp_engine.stop()
+    except Exception as e:
+        print(f"Failed to get available voices: {e}")
+        # Add a default voice option
+        available_voices = ["Default Voice"]
+        voice_id_map["Default Voice"] = "default"
     
     # Find the current voice name based on the stored voice_name
     current_voice_name = None
@@ -845,21 +1032,23 @@ def show_settings():
         if selected_voice_name and selected_voice_name in voice_id_map:
             settings['voice_name'] = selected_voice_name
             # Update the main engine voice
-            engine.setProperty('voice', voice_id_map[selected_voice_name])
+            if engine is not None:
+                engine.setProperty('voice', voice_id_map[selected_voice_name])
         
         # Update engine properties immediately
-        engine.setProperty('rate', settings['speech_rate'])
-        engine.setProperty('volume', settings['volume'])
+        if engine is not None:
+            engine.setProperty('rate', settings['speech_rate'])
+            engine.setProperty('volume', settings['volume'])
         
         # Save settings to file immediately
         print(f"[DEBUG] Attempting to save settings to: {SETTINGS_FILE.absolute()}")
         
         # Force save with error handling
         try:
-            # Save directly to current directory
-            with open("settings.json", 'w', encoding='utf-8') as f:
+            # Save directly to asset directory
+            with open(os.path.join("asset", "settings.json"), 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
-            print(f"[DEBUG] Settings saved directly to settings.json")
+            print(f"[DEBUG] Settings saved directly to asset/settings.json")
             
             # Also try the original method
             save_settings_to_file()
@@ -869,11 +1058,11 @@ def show_settings():
             save_settings_to_file()
         
         # Verify settings were saved
-        if Path("settings.json").exists():
+        if Path(os.path.join("asset", "settings.json")).exists():
             print(f"[DEBUG] Settings file exists after save")
             # Read back the file to verify content
             try:
-                with open("settings.json", 'r', encoding='utf-8') as f:
+                with open(os.path.join("asset", "settings.json"), 'r', encoding='utf-8') as f:
                     saved_content = json.load(f)
                 print(f"[DEBUG] File content after save: {saved_content}")
                 messagebox.showinfo("Settings Saved", f"Settings have been saved successfully!")
@@ -930,8 +1119,6 @@ def show_settings():
                         activebackground="#1761b0", activeforeground="white",
                         width=12, height=1)
     save_btn.pack(side="left", padx=(0, 15))
-    
-
     
     cancel_btn = tk.Button(button_container, text="Cancel", font=("Segoe UI", 13),
                           bg="#e0e0e0", fg="#333", command=cancel_settings,
@@ -1126,177 +1313,124 @@ def create_menu_bar():
     help_menu.add_command(label="About", command=show_about)
 
 # GUI Setup
-root = tk.Tk()
-root.title("TTS Pronunciation Practice")
-root.geometry("650x500")  # Optimized size for perfect fit
-root.resizable(False, False)
-root.configure(bg="#f5f5f5")
-
-# Create menu bar
-create_menu_bar()
-
-# Set the main window icon as well
 try:
-    icon_img = create_image()
-    icon_img.save("y_icon_temp.ico")
-    root.iconbitmap("y_icon_temp.ico")
-except Exception:
-    pass
+    root = tk.Tk()
+    root.title("TTS Pronunciation Practice")
+    root.geometry("650x500")  # Optimized size for perfect fit
+    root.resizable(False, False)
+    root.configure(bg="#f5f5f5")
 
-header = tk.Label(root, text="Type a word to hear and see its pronunciation", font=("Segoe UI", 14, "bold"), bg="#f5f5f5", fg="#333")
-header.pack(pady=(5, 8))  # Reduced top padding from 10 to 5
+    # Create menu bar
+    create_menu_bar()
 
-entry_frame = tk.Frame(root, bg="#f5f5f5")
-entry_frame.pack(pady=2)
-
-entry = tk.Entry(entry_frame, font=("Segoe UI", 18), width=18, justify="center", relief="solid", bd=2)
-entry.grid(row=0, column=0, padx=(0, 8))
-entry.bind("<Return>", speak_text)
-
-speak_btn = tk.Button(entry_frame, text="🔊 Speak", font=("Segoe UI", 13, "bold"), bg="#1a73e8", fg="white", activebackground="#1761b0", activeforeground="white", command=speak_text, relief="flat", padx=12, pady=2)
-speak_btn.grid(row=0, column=1)
-
-stop_btn = tk.Button(entry_frame, text="⏹ Stop", font=("Segoe UI", 13, "bold"), bg="#ff5722", fg="white", activebackground="#d84315", activeforeground="white", command=stop_speech, relief="flat", padx=12, pady=2)
-stop_btn.grid(row=0, column=2, padx=(8, 8))
-stop_btn.grid_remove()  # Hide initially
-
-clear_btn = tk.Button(entry_frame, text="✖", font=("Segoe UI", 13), bg="#e57373", fg="white", activebackground="#c62828", activeforeground="white", command=clear_entry, relief="flat", padx=8, pady=2)
-clear_btn.grid(row=0, column=3, padx=(0, 0))
-
-pronun_frame = tk.Frame(root, bg="#f5f5f5")
-pronun_frame.pack(pady=(18, 8))
-
-pronun_label = tk.Label(pronun_frame, text="IPA Pronunciation", font=("Segoe UI", 12, "bold"), bg="#f5f5f5", fg="#333")
-pronun_label.pack()
-
-ipa_label = tk.Label(pronun_frame, text="", font=("Segoe UI", 28, "bold"), fg="#1a73e8", bg="#f5f5f5")
-ipa_label.pack(pady=(2, 0))
-
-sep = ttk.Separator(root, orient='horizontal')
-sep.pack(fill='x', pady=10)
-
-# --- Smart, scrollable clickable history UI ---
-history_label = tk.Label(root, text="History:", font=("Segoe UI", 11), bg="#f5f5f5", fg="#555")
-history_label.pack(pady=(2, 0))
-
-history_frame_container = tk.Frame(root, bg="#f5f5f5")
-history_frame_container.pack(pady=(0, 8), fill='x', expand=False)
-
-history_canvas = tk.Canvas(history_frame_container, height=150, bg="#f5f5f5", highlightthickness=0)  # Reduced height from 200 to 150
-history_scrollbar = tk.Scrollbar(history_frame_container, orient="vertical", command=history_canvas.yview)
-history_inner_frame = tk.Frame(history_canvas, bg="#f5f5f5")
-
-history_inner_frame.bind(
-    "<Configure>",
-    lambda e: history_canvas.configure(
-        scrollregion=history_canvas.bbox("all")
-    )
-)
-history_canvas.create_window((0, 0), window=history_inner_frame, anchor="nw")
-history_canvas.configure(yscrollcommand=history_scrollbar.set)
-history_canvas.pack(side="left", fill="both", expand=True)
-history_scrollbar.pack(side="right", fill="y")
-
-def update_history_ui():
-    # Clear previous widgets
-    for widget in history_inner_frame.winfo_children():
-        widget.destroy()
-    def resize_buttons(event=None):
-        width = history_canvas.winfo_width()
-        for btn in history_inner_frame.winfo_children():
-            btn.config(width=width)
-    for idx, item in enumerate(history):
-        def make_callback(word=item):
-            return lambda: on_history_click(word)
-        btn = tk.Button(
-            history_inner_frame,
-            text=item,
-            font=("Segoe UI", 11),
-            bg="#e3eafc" if idx % 2 == 0 else "#f5f5f5",
-            fg="#1a73e8",
-            relief="flat",
-            cursor="hand2",
-            anchor="w",
-            command=make_callback(item),
-            padx=8, pady=2
-        )
-        btn.pack(fill='x', expand=True, pady=1, padx=2)
-    # Bind resize event
-    history_canvas.bind('<Configure>', lambda e: resize_buttons())
-    resize_buttons()
-
-# Setup system tray and clipboard monitoring
-root.protocol("WM_DELETE_WINDOW", on_closing)
-setup_tray()
-clipboard_thread = threading.Thread(target=clipboard_monitor, daemon=True)
-clipboard_thread.start()
-
-def speak_with_subprocess(text):
-    """Use subprocess to run TTS in complete isolation"""
-    global current_subprocess
-    
+    # Set the main window icon as well
     try:
-        # Create a temporary Python script for TTS
-        script_content = f'''
-import pyttsx3
-import sys
-import time
+        import os
+        icon_path = os.path.join("asset", "y_icon_temp.ico")
+        if not os.path.exists(icon_path):
+            icon_img = create_image()
+            icon_img.save(icon_path)
+        root.iconbitmap(icon_path)
+    except Exception:
+        pass
 
-try:
-    engine = pyttsx3.init()
-    engine.setProperty('rate', {settings['speech_rate']})
-    engine.setProperty('volume', {settings['volume']})
-    
-    # Set voice
-    voices = engine.getProperty('voices')
-    for voice in voices:
-        if "{settings['voice_name'].lower()}" in voice.name.lower():
-            engine.setProperty('voice', voice.id)
-            break
-    
-    engine.say("{text}")
-    engine.runAndWait()
-    print("SUCCESS")
+    header = tk.Label(root, text="Type a word to hear and see its pronunciation", font=("Segoe UI", 14, "bold"), bg="#f5f5f5", fg="#333")
+    header.pack(pady=(5, 8))  # Reduced top padding from 10 to 5
+
+    entry_frame = tk.Frame(root, bg="#f5f5f5")
+    entry_frame.pack(pady=2)
+
+    entry = tk.Entry(entry_frame, font=("Segoe UI", 18), width=18, justify="center", relief="solid", bd=2)
+    entry.grid(row=0, column=0, padx=(0, 8))
+    entry.bind("<Return>", speak_text)
+
+    speak_btn = tk.Button(entry_frame, text="🔊 Speak", font=("Segoe UI", 13, "bold"), bg="#1a73e8", fg="white", activebackground="#1761b0", activeforeground="white", command=speak_text, relief="flat", padx=12, pady=2)
+    speak_btn.grid(row=0, column=1)
+
+    stop_btn = tk.Button(entry_frame, text="⏹ Stop", font=("Segoe UI", 13, "bold"), bg="#ff5722", fg="white", activebackground="#d84315", activeforeground="white", command=stop_speech, relief="flat", padx=12, pady=2)
+    stop_btn.grid(row=0, column=2, padx=(8, 8))
+    stop_btn.grid_remove()  # Hide initially
+
+    clear_btn = tk.Button(entry_frame, text="✖", font=("Segoe UI", 13), bg="#e57373", fg="white", activebackground="#c62828", activeforeground="white", command=clear_entry, relief="flat", padx=8, pady=2)
+    clear_btn.grid(row=0, column=3, padx=(0, 0))
+
+    pronun_frame = tk.Frame(root, bg="#f5f5f5")
+    pronun_frame.pack(pady=(18, 8))
+
+    pronun_label = tk.Label(pronun_frame, text="IPA Pronunciation", font=("Segoe UI", 12, "bold"), bg="#f5f5f5", fg="#333")
+    pronun_label.pack()
+
+    ipa_label = tk.Label(pronun_frame, text="", font=("Segoe UI", 28, "bold"), fg="#1a73e8", bg="#f5f5f5")
+    ipa_label.pack(pady=(2, 0))
+
+    sep = ttk.Separator(root, orient='horizontal')
+    sep.pack(fill='x', pady=10)
+
+    # --- Smart, scrollable clickable history UI ---
+    history_label = tk.Label(root, text="History:", font=("Segoe UI", 11), bg="#f5f5f5", fg="#555")
+    history_label.pack(pady=(2, 0))
+
+    history_frame_container = tk.Frame(root, bg="#f5f5f5")
+    history_frame_container.pack(pady=(0, 8), fill='x', expand=False)
+
+    history_canvas = tk.Canvas(history_frame_container, height=150, bg="#f5f5f5", highlightthickness=0)  # Reduced height from 200 to 150
+    history_scrollbar = tk.Scrollbar(history_frame_container, orient="vertical", command=history_canvas.yview)
+    history_inner_frame = tk.Frame(history_canvas, bg="#f5f5f5")
+
+    history_inner_frame.bind(
+        "<Configure>",
+        lambda e: history_canvas.configure(
+            scrollregion=history_canvas.bbox("all")
+        )
+    )
+    history_canvas.create_window((0, 0), window=history_inner_frame, anchor="nw")
+    history_canvas.configure(yscrollcommand=history_scrollbar.set)
+    history_canvas.pack(side="left", fill="both", expand=True)
+    history_scrollbar.pack(side="right", fill="y")
+
+    def update_history_ui():
+        # Clear previous widgets
+        for widget in history_inner_frame.winfo_children():
+            widget.destroy()
+        def resize_buttons(event=None):
+            width = history_canvas.winfo_width()
+            for btn in history_inner_frame.winfo_children():
+                btn.config(width=width)
+        for idx, item in enumerate(history):
+            def make_callback(word=item):
+                return lambda: on_history_click(word)
+            btn = tk.Button(
+                history_inner_frame,
+                text=item,
+                font=("Segoe UI", 11),
+                bg="#e3eafc" if idx % 2 == 0 else "#f5f5f5",
+                fg="#1a73e8",
+                relief="flat",
+                cursor="hand2",
+                anchor="w",
+                command=make_callback(item),
+                padx=8, pady=2
+            )
+            btn.pack(fill='x', expand=True, pady=1, padx=2)
+        # Bind resize event
+        history_canvas.bind('<Configure>', lambda e: resize_buttons())
+        resize_buttons()
+
+    # Setup system tray and clipboard monitoring
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    setup_tray()
+    clipboard_thread = threading.Thread(target=clipboard_monitor, daemon=True)
+    clipboard_thread.start()
+
+    # Check for updates in background
+    check_updates_in_background()
+
 except Exception as e:
-    print(f"ERROR: {{e}}")
+    print(f"Failed to initialize GUI: {e}")
+    try:
+        messagebox.showerror("Initialization Error", f"Failed to start the application:\n{str(e)}")
+    except:
+        pass
     sys.exit(1)
-'''
-        
-        # Write script to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(script_content)
-            script_path = f.name
-        
-        # Run the script without capturing output (so it can be stopped)
-        current_subprocess = subprocess.Popen([sys.executable, script_path], 
-                                            stdout=subprocess.DEVNULL, 
-                                            stderr=subprocess.DEVNULL)
-        
-        # Wait for completion or until stopped - check more frequently
-        while current_subprocess.poll() is None and is_speaking:
-            time.sleep(0.05)  # Check every 50ms instead of 100ms
-        
-        # Clean up
-        try:
-            os.unlink(script_path)
-        except:
-            pass
-        
-        if current_subprocess.poll() is None:
-            # Still running, terminate it
-            current_subprocess.terminate()
-            current_subprocess.wait(timeout=0.5)
-            return False
-        elif current_subprocess.returncode == 0:
-            return True
-        else:
-            return False
-            
-    except Exception as e:
-        if root:
-            root.after(0, lambda: ipa_label.config(text=f"TTS Error: {str(e)[:30]}...", fg="red"))
-        return False
-    finally:
-        current_subprocess = None
 
 root.mainloop()
