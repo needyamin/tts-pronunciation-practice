@@ -94,6 +94,14 @@ See the [Building Executable](#building-executable) section for detailed instruc
 - `Enter`: Speak the current word
 - `Ctrl+C`: Copy any text to clipboard (auto-detected within 10ms)
 
+# Settings File Location
+
+- **When running from source**: Settings are saved in `asset/settings.json` in the project directory.
+- **When running as an EXE**: Settings are saved in a user-writable directory:
+  - On Windows: `%APPDATA%/TTS-Pronunciation-Practice/settings.json`
+  - On other systems: `~/TTS-Pronunciation-Practice/settings.json`
+- This ensures settings can always be saved, even if the EXE is in a protected folder.
+
 ## Dependencies
 
 - **pyttsx3**: Text-to-speech engine

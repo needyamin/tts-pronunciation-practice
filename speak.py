@@ -8,12 +8,14 @@ import re
 import threading
 import time
 import pystray
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 import sys
 import pyperclip
 import requests
 import json
 from pathlib import Path
+import platform
+import subprocess
 
 # Check for multiple instances
 def check_single_instance():
@@ -89,25 +91,42 @@ settings = {
     'speech_rate': 150,
     'voice_name': 'zira',
     'volume': 1.0,  # Volume level (0.0 to 1.0)
-    'show_ipa': True  # Whether to show IPA pronunciation
+    'show_ipa': True,  # Whether to show IPA pronunciation
+    'auto_startup': False  # New: Auto start on Windows
 }
 
-# Settings file path
-SETTINGS_FILE = Path(os.path.join("asset", "settings.json"))
+# GitHub API token to avoid rate limiting
+GITHUB_TOKEN = "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"
+
+def get_settings_file_path():
+    """Return a user-writable settings file path"""
+    if getattr(sys, 'frozen', False):
+        # Running as EXE
+        base_dir = os.path.expanduser('~')
+        if platform.system() == "Windows":
+            appdata = os.getenv('APPDATA')
+            if appdata:
+                base_dir = appdata
+        settings_dir = os.path.join(base_dir, "TTS-Pronunciation-Practice")
+        os.makedirs(settings_dir, exist_ok=True)
+        return os.path.join(settings_dir, "settings.json")
+    else:
+        # Running as script
+        return os.path.join("asset", "settings.json")
+
+SETTINGS_FILE = Path(get_settings_file_path())
 
 def load_settings():
     """Load settings from file"""
     global settings
     try:
-        settings_file = Path(os.path.join("asset", "settings.json"))
+        settings_file = Path(get_settings_file_path())
         if settings_file.exists():
             with open(settings_file, 'r', encoding='utf-8') as f:
                 loaded_settings = json.load(f)
-                # Update settings with loaded values, keeping defaults for missing keys
                 for key, value in loaded_settings.items():
                     if key in settings:
-                        # Ensure proper type conversion
-                        if key in ['tts_enabled', 'clipboard_monitoring', 'auto_speak', 'show_ipa']:
+                        if key in ['tts_enabled', 'clipboard_monitoring', 'auto_speak', 'show_ipa', 'auto_startup']:
                             settings[key] = bool(value)
                         elif key == 'speech_rate':
                             settings[key] = int(value)
@@ -118,27 +137,32 @@ def load_settings():
                 print(f"Settings loaded from: {settings_file.absolute()}")
                 print(f"Loaded settings: {settings}")
         else:
-            # Create default settings file if it doesn't exist
             print(f"Settings file not found, creating default: {settings_file.absolute()}")
             save_settings_to_file()
     except Exception as e:
         print(f"Failed to load settings: {e}")
-        # Create default settings file
         save_settings_to_file()
 
 def save_settings_to_file():
     """Save settings to file"""
     try:
-        with open(os.path.join("asset", "settings.json"), 'w', encoding='utf-8') as f:
+        settings_file_path = get_settings_file_path()
+        with open(settings_file_path, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
-        
-        print(f"Settings saved to: {Path(os.path.join('asset', 'settings.json')).absolute()}")
-        
-        if Path(os.path.join("asset", "settings.json")).exists():
-            file_size = Path(os.path.join("asset", "settings.json")).stat().st_size
+        print(f"Settings saved to: {Path(settings_file_path).absolute()}")
+        if Path(settings_file_path).exists():
+            file_size = Path(settings_file_path).stat().st_size
+        # Handle auto startup shortcut
+        if settings.get('auto_startup', False):
+            try:
+                add_startup_shortcut()
+            except Exception as e:
+                print(f"[DEBUG] Failed to add startup shortcut: {e}")
         else:
-            pass
-            
+            try:
+                remove_startup_shortcut()
+            except Exception as e:
+                print(f"[DEBUG] Failed to remove startup shortcut: {e}")
     except Exception as e:
         print(f"Failed to save settings: {e}")
         try:
@@ -146,10 +170,9 @@ def save_settings_to_file():
             temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', encoding='utf-8')
             json.dump(settings, temp_file, indent=2, ensure_ascii=False)
             temp_file.close()
-            
             import shutil
-            shutil.move(temp_file.name, os.path.join("asset", "settings.json"))
-            print(f"Settings saved using alternative method: {Path(os.path.join('asset', 'settings.json')).absolute()}")
+            shutil.move(temp_file.name, get_settings_file_path())
+            print(f"Settings saved using alternative method: {Path(get_settings_file_path()).absolute()}")
         except Exception as e2:
             print(f"Alternative save method also failed: {e2}")
 
@@ -157,7 +180,7 @@ def save_settings_to_file():
 load_settings()
 
 # Ensure settings file exists
-if not Path(os.path.join("asset", "settings.json")).exists():
+if not Path(get_settings_file_path()).exists():
     print("Creating initial settings file...")
     save_settings_to_file()
 
@@ -347,13 +370,18 @@ engine_in_use = False
 REPO_OWNER = "needyamin"
 REPO_NAME = "tts-pronunciation-practice"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-CURRENT_VERSION = "1.0.1"  # Update as needed
+CURRENT_VERSION = "1.0.0"  # Update as needed
 UPDATE_CHECK_FILE = Path(".update_check")
 
 def compare_versions(v1, v2):
     def parse(v):
-        return [int(x) for x in v.split('.') if x.isdigit()]
-    return parse(v1) > parse(v2)
+        return [int(x) for x in v.split('.')]
+    p1 = parse(v1)
+    p2 = parse(v2)
+    length = max(len(p1), len(p2))
+    p1 += [0] * (length - len(p1))
+    p2 += [0] * (length - len(p2))
+    return p1 > p2
 
 def debug_update_check(log):
     """Debug function to check update system status"""
@@ -402,42 +430,138 @@ def debug_update_check(log):
         log(f"Debug Error: {str(e)}")
 
 def check_for_updates():
-    """Check for updates from GitHub releases"""
+    """Check for updates from GitHub releases (no rate limit, always check)"""
     try:
-        # Check if we should skip this update check (to avoid too frequent checks)
-        if UPDATE_CHECK_FILE.exists():
-            with open(UPDATE_CHECK_FILE, 'r') as f:
-                last_check = float(f.read().strip())
-                # Only check once per hour
-                if time.time() - last_check < 3600:
-                    return None
-        
         headers = {
             'Accept': 'application/vnd.github.v3+json',
             'User-Agent': 'TTS-Pronunciation-Practice'
         }
-        
+        if GITHUB_TOKEN:
+            headers['Authorization'] = f'token {GITHUB_TOKEN}'
         response = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
+        print(f"[DEBUG] GitHub API status: {response.status_code}")
         if response.status_code == 200:
             latest_release = response.json()
+            print(f"[DEBUG] GitHub API response: {json.dumps(latest_release, indent=2)}")
+            # Check if release is draft or prerelease
+            if latest_release.get('draft') or latest_release.get('prerelease'):
+                print("[DEBUG] Latest release is draft or prerelease. Skipping.")
+                return None
             latest_version = latest_release.get('tag_name', '').lstrip('v')
-            
-            # Save the check time
-            with open(UPDATE_CHECK_FILE, 'w') as f:
-                f.write(str(time.time()))
-            
+            print(f"[DEBUG] Latest version from GitHub: {latest_version}")
+            print(f"[DEBUG] Current version: {CURRENT_VERSION}")
             # Compare versions
             if compare_versions(latest_version, CURRENT_VERSION):
+                # Try to find installer or exe asset
+                assets = latest_release.get('assets', [])
+                print(f"[DEBUG] Assets found: {[a.get('name') for a in assets]}")
+                installer_url = None
+                exe_url = None
+                for asset in assets:
+                    name = asset.get('name', '').lower()
+                    if name.endswith('setup.exe'):
+                        installer_url = asset.get('browser_download_url')
+                    elif name.endswith('.exe'):
+                        exe_url = asset.get('browser_download_url')
+                if not installer_url and not exe_url:
+                    print("[DEBUG] No .exe or setup.exe asset found in release!")
                 return {
                     'version': latest_version,
                     'url': latest_release.get('html_url', ''),
                     'body': latest_release.get('body', ''),
-                    'download_url': latest_release.get('zipball_url', '')
+                    'download_url': installer_url or exe_url,
+                    'is_installer': bool(installer_url)
                 }
+            else:
+                print("[DEBUG] No update needed: latest_version <= current_version")
+        else:
+            print(f"[DEBUG] GitHub API error: {response.text}")
     except Exception as e:
-        print(f"Update check failed: {e}")
-    
+        print(f"[DEBUG] Update check failed: {e}")
     return None
+
+# Helper: Download file with progress dialog
+def download_with_progress(url, dest_path, title="Downloading Update"):
+    import tkinter as tk
+    from tkinter import ttk
+    import requests
+    win = tk.Toplevel(root)
+    set_window_icon(win)
+    win.title(title)
+    win.geometry("400x120")
+    win.resizable(False, False)
+    win.configure(bg="#f5f5f5")
+    win.transient(root)
+    win.grab_set()
+    tk.Label(win, text=title, font=("Segoe UI", 13, "bold"), bg="#f5f5f5").pack(pady=(18, 8))
+    progress = ttk.Progressbar(win, orient="horizontal", length=320, mode="determinate")
+    progress.pack(pady=(0, 10))
+    percent_label = tk.Label(win, text="0%", font=("Segoe UI", 10), bg="#f5f5f5")
+    percent_label.pack()
+    win.update()
+    try:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            total = int(r.headers.get('content-length', 0))
+            with open(dest_path, 'wb') as f:
+                downloaded = 0
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            percent = int(downloaded * 100 / total)
+                            progress['value'] = percent
+                            percent_label.config(text=f"{percent}%")
+                            win.update()
+        win.destroy()
+        return True
+    except Exception as e:
+        win.destroy()
+        tk.messagebox.showerror("Download Failed", f"Failed to download update:\n{e}")
+        return False
+
+# Auto-update logic
+def auto_update_if_available():
+    update_info = check_for_updates()
+    if update_info:
+        if not update_info['download_url']:
+            tk.messagebox.showerror("Update Error", "No downloadable installer or EXE found in the latest release.\nPlease check your GitHub release assets.")
+            return
+        # Ask user for confirmation
+        if tk.messagebox.askyesno("Update Available", f"A new version ({update_info['version']}) is available.\n\nDo you want to download and install it now?"):
+            url = update_info['download_url']
+            # Download to temp file
+            import tempfile
+            ext = ".exe"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                dest_path = tmp.name
+            if download_with_progress(url, dest_path):
+                # Run installer or new EXE
+                try:
+                    if update_info['is_installer']:
+                        subprocess.Popen([dest_path], shell=True)
+                    else:
+                        subprocess.Popen([dest_path], shell=True)
+                    tk.messagebox.showinfo("Update Started", "The installer has started. Please follow the instructions to complete the update. The app will now close.")
+                    root.destroy()
+                    sys.exit(0)
+                except Exception as e:
+                    tk.messagebox.showerror("Update Error", f"Failed to launch installer:\n{e}")
+    else:
+        print("[DEBUG] No update available or error occurred.")
+
+# Call this on startup and in manual check
+# auto_update_if_available()  # Uncomment to enable auto-update on startup
+
+# Helper to set icon for Toplevel windows
+icon_path = os.path.join("asset", "y_icon_temp.ico")
+def set_window_icon(window):
+    try:
+        if os.path.exists(icon_path):
+            window.iconbitmap(icon_path)
+    except Exception:
+        pass
 
 def show_update_dialog(update_info):
     """Show update dialog to user"""
@@ -445,6 +569,7 @@ def show_update_dialog(update_info):
         return
     
     update_window = tk.Toplevel(root)
+    set_window_icon(update_window)
     update_window.title("Update Available")
     update_window.geometry("500x400")
     update_window.resizable(False, False)
@@ -853,8 +978,9 @@ def clear_history():
 def show_settings():
     """Show settings dialog"""
     settings_window = tk.Toplevel(root)
+    set_window_icon(settings_window)
     settings_window.title("Settings")
-    settings_window.geometry("520x580")  # Increased height to ensure buttons are visible
+    settings_window.geometry("520x620")  # Increased height for new option
     settings_window.resizable(False, False)
     settings_window.configure(bg="#f5f5f5")
     settings_window.transient(root)
@@ -863,8 +989,8 @@ def show_settings():
     # Center the window
     settings_window.update_idletasks()
     x = (settings_window.winfo_screenwidth() // 2) - (520 // 2)
-    y = (settings_window.winfo_screenheight() // 2) - (580 // 2)
-    settings_window.geometry(f"520x580+{x}+{y}")
+    y = (settings_window.winfo_screenheight() // 2) - (620 // 2)
+    settings_window.geometry(f"520x620+{x}+{y}")
     
     # Create main container
     main_container = tk.Frame(settings_window, bg="#f5f5f5")
@@ -993,6 +1119,13 @@ def show_settings():
                                    bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
     show_ipa_check.pack(anchor="w", padx=15, pady=(0, 10))
     
+    # --- Auto Startup Option ---
+    auto_startup_var = tk.BooleanVar(value=settings.get('auto_startup', False))
+    auto_startup_check = tk.Checkbutton(content_frame, text="Auto Start on Windows Login", 
+        variable=auto_startup_var, font=("Segoe UI", 11),
+        bg="#f5f5f5", fg="#333", selectcolor="#e3eafc")
+    auto_startup_check.pack(anchor="w", padx=15, pady=(0, 10))
+    
     # Buttons - Fixed at bottom of window
     button_frame = tk.Frame(settings_window, bg="#f5f5f5")
     button_frame.pack(side="bottom", fill="x", padx=25, pady=25)
@@ -1021,6 +1154,7 @@ def show_settings():
         settings['speech_rate'] = int(rate_var.get())
         settings['volume'] = float(volume_var.get())
         settings['show_ipa'] = bool(show_ipa_var.get())
+        settings['auto_startup'] = bool(auto_startup_var.get())
         
         # Debug: Print settings after update
         print(f"[DEBUG] Settings after update:")
@@ -1045,24 +1179,22 @@ def show_settings():
         
         # Force save with error handling
         try:
-            # Save directly to asset directory
-            with open(os.path.join("asset", "settings.json"), 'w', encoding='utf-8') as f:
+            # Save directly to user-writable directory
+            with open(get_settings_file_path(), 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
-            print(f"[DEBUG] Settings saved directly to asset/settings.json")
-            
+            print(f"[DEBUG] Settings saved directly to {get_settings_file_path()}")
             # Also try the original method
             save_settings_to_file()
-            
         except Exception as e:
             print(f"[DEBUG] Direct save failed: {e}")
             save_settings_to_file()
         
         # Verify settings were saved
-        if Path(os.path.join("asset", "settings.json")).exists():
+        if Path(get_settings_file_path()).exists():
             print(f"[DEBUG] Settings file exists after save")
             # Read back the file to verify content
             try:
-                with open(os.path.join("asset", "settings.json"), 'r', encoding='utf-8') as f:
+                with open(get_settings_file_path(), 'r', encoding='utf-8') as f:
                     saved_content = json.load(f)
                 print(f"[DEBUG] File content after save: {saved_content}")
                 messagebox.showinfo("Settings Saved", f"Settings have been saved successfully!")
@@ -1086,6 +1218,7 @@ def show_settings():
             settings['voice_name'] = 'zira'
             settings['volume'] = 1.0
             settings['show_ipa'] = True
+            settings['auto_startup'] = False
             
             # Update UI
             tts_enabled_var.set(True)
@@ -1094,6 +1227,7 @@ def show_settings():
             rate_var.set(150)
             volume_var.set(1.0)
             show_ipa_var.set(True)
+            auto_startup_var.set(False)
             
             # Reset voice selection
             current_voice_name = None
@@ -1130,8 +1264,9 @@ def show_settings():
 def show_about():
     """Show about dialog"""
     about_window = tk.Toplevel(root)
+    set_window_icon(about_window)
     about_window.title("About")
-    about_window.geometry("400x300")
+    about_window.geometry("400x380")
     about_window.resizable(False, False)
     about_window.configure(bg="#f5f5f5")
     about_window.transient(root)
@@ -1140,31 +1275,65 @@ def show_about():
     # Center the window
     about_window.update_idletasks()
     x = (about_window.winfo_screenwidth() // 2) - (400 // 2)
-    y = (about_window.winfo_screenheight() // 2) - (300 // 2)
-    about_window.geometry(f"400x300+{x}+{y}")
-    
+    y = (about_window.winfo_screenheight() // 2) - (380 // 2)
+    about_window.geometry(f"400x380+{x}+{y}")
+
+    # --- GitHub profile info ---
+    github_username = "needyamin"
+    github_url = f"https://github.com/{github_username}"
+    github_img_url = "https://avatars.githubusercontent.com/u/21260178?v=4"
+    local_img_path = os.path.join("asset", "github_profile.png")
+
+    # Download profile image if not present
+    try:
+        if not os.path.exists(local_img_path):
+            urllib.request.urlretrieve(github_img_url, local_img_path)
+    except Exception as e:
+        local_img_path = None
+
     # Content
     tk.Label(about_window, text="TTS Pronunciation Practice", font=("Segoe UI", 16, "bold"), 
-            bg="#f5f5f5", fg="#333").pack(pady=(30, 10))
-    
+            bg="#f5f5f5", fg="#333").pack(pady=(18, 6))
+
     tk.Label(about_window, text=f"Version {CURRENT_VERSION}", font=("Segoe UI", 12), 
-            bg="#f5f5f5", fg="#666").pack(pady=(0, 20))
-    
+            bg="#f5f5f5", fg="#666").pack(pady=(0, 10))
+
     tk.Label(about_window, text="A tool for practicing English pronunciation\nwith text-to-speech and IPA display.", 
-            font=("Segoe UI", 11), bg="#f5f5f5", fg="#333", justify="center").pack(pady=(0, 20))
-    
-    tk.Label(about_window, text="Created by Yamin", font=("Segoe UI", 10), 
-            bg="#f5f5f5", fg="#666").pack(pady=(0, 20))
-    
+            font=("Segoe UI", 11), bg="#f5f5f5", fg="#333", justify="center").pack(pady=(0, 10))
+
+    # Profile image
+    if local_img_path and os.path.exists(local_img_path):
+        try:
+            img = Image.open(local_img_path).resize((64, 64))
+            photo = ImageTk.PhotoImage(img)
+            img_label = tk.Label(about_window, image=photo, bg="#f5f5f5")
+            img_label.image = photo  # Keep reference
+            img_label.pack(pady=(0, 6))
+        except Exception:
+            pass
+
+    # Name and GitHub link
+    name_label = tk.Label(about_window, text="Created by Yamin", font=("Segoe UI", 11, "bold"), bg="#f5f5f5", fg="#1a73e8", cursor="hand2")
+    name_label.pack()
+    def open_github(event=None):
+        import webbrowser
+        webbrowser.open(github_url)
+    name_label.bind("<Button-1>", open_github)
+
+    link_label = tk.Label(about_window, text=github_url, font=("Segoe UI", 10, "underline"), fg="#1a73e8", bg="#f5f5f5", cursor="hand2")
+    link_label.pack(pady=(0, 10))
+    link_label.bind("<Button-1>", open_github)
+
     # Close button
     close_btn = tk.Button(about_window, text="Close", font=("Segoe UI", 12),
                          bg="#1a73e8", fg="white", command=about_window.destroy,
                          relief="flat", padx=20, pady=8)
-    close_btn.pack()
+    close_btn.pack(pady=(10, 0))
 
 def show_update_status():
     """Show update status in a separate window"""
     update_window = tk.Toplevel(root)
+    set_window_icon(update_window)
     update_window.title("Check for Updates")
     update_window.geometry("500x400")
     update_window.resizable(False, False)
@@ -1218,31 +1387,37 @@ def show_update_status():
         def update_checker():
             try:
                 update_info = check_for_updates()
-                current_update_info[0] = update_info  # Store for download button
-                
+                current_update_info[0] = update_info
                 if update_info:
-                    # Update available
-                    root.after(0, lambda: status_label.config(text="Update Available!", fg="#34a853"))
-                    root.after(0, lambda: text_widget.config(state="normal"))
-                    root.after(0, lambda: text_widget.delete(1.0, tk.END))
-                    root.after(0, lambda: text_widget.insert(1.0, f"New version available: {update_info['version']}\n\n"))
-                    root.after(0, lambda: text_widget.insert(tk.END, f"Current version: {CURRENT_VERSION}\n\n"))
-                    root.after(0, lambda: text_widget.insert(tk.END, "What's new:\n"))
-                    root.after(0, lambda: text_widget.insert(tk.END, update_info.get('body', 'No release notes available.')))
-                    root.after(0, lambda: text_widget.config(state="disabled"))
-                    
-                    # Show download button
-                    download_btn.config(state="normal")
+                    # Auto-update dialog
+                    if tk.messagebox.askyesno("Update Available", f"A new version ({update_info['version']}) is available.\n\nDo you want to download and install it now?"):
+                        url = update_info['download_url']
+                        if not url:
+                            root.after(0, lambda: status_label.config(text="No downloadable installer or EXE found.", fg="#d32f2f"))
+                            return
+                        import tempfile
+                        ext = ".exe"
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                            dest_path = tmp.name
+                        if download_with_progress(url, dest_path):
+                            try:
+                                if update_info['is_installer']:
+                                    subprocess.Popen([dest_path], shell=True)
+                                else:
+                                    subprocess.Popen([dest_path], shell=True)
+                                tk.messagebox.showinfo("Update Started", "The installer has started. Please follow the instructions to complete the update. The app will now close.")
+                                root.destroy()
+                                sys.exit(0)
+                            except Exception as e:
+                                tk.messagebox.showerror("Update Error", f"Failed to launch installer:\n{e}")
+                    return
                 else:
-                    # No update available
                     root.after(0, lambda: status_label.config(text="No updates available", fg="#666"))
                     root.after(0, lambda: text_widget.config(state="normal"))
                     root.after(0, lambda: text_widget.delete(1.0, tk.END))
                     root.after(0, lambda: text_widget.insert(1.0, f"You are using the latest version: {CURRENT_VERSION}\n\n"))
                     root.after(0, lambda: text_widget.insert(tk.END, "No updates are currently available."))
                     root.after(0, lambda: text_widget.config(state="disabled"))
-                    
-                    # Hide download button
                     download_btn.config(state="disabled")
             except Exception as e:
                 root.after(0, lambda: status_label.config(text="Error checking for updates", fg="#d32f2f"))
@@ -1300,10 +1475,8 @@ def create_menu_bar():
     edit_menu.add_command(label="Clear Entry", command=clear_entry)
     edit_menu.add_command(label="Copy IPA", command=lambda: pyperclip.copy(ipa_label.cget("text")))
     
-    # Settings Menu
-    settings_menu = tk.Menu(menubar, tearoff=0)
-    menubar.add_cascade(label="Settings", menu=settings_menu)
-    settings_menu.add_command(label="Preferences", command=show_settings)
+    # Settings Menu (no Preferences dropdown, just direct)
+    menubar.add_command(label="Settings", command=show_settings)
     
     # Help Menu
     help_menu = tk.Menu(menubar, tearoff=0)
@@ -1434,3 +1607,39 @@ except Exception as e:
     sys.exit(1)
 
 root.mainloop()
+
+# Helper for Windows startup shortcut
+import sys
+import os
+import shutil
+import platform
+
+def get_startup_shortcut_path():
+    if platform.system() != "Windows":
+        return None
+    startup_dir = os.path.join(os.environ.get('APPDATA', ''), r'Microsoft\Windows\Start Menu\Programs\Startup')
+    exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+    shortcut_name = "TTS Pronunciation Practice.lnk"
+    return os.path.join(startup_dir, shortcut_name)
+
+def add_startup_shortcut():
+    if platform.system() != "Windows":
+        return
+    import pythoncom
+    from win32com.shell import shell, shellcon
+    from win32com.client import Dispatch
+    shortcut_path = get_startup_shortcut_path()
+    exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.executable + f' "{os.path.abspath(__file__)}"'
+    shell = Dispatch('WScript.Shell')
+    shortcut = shell.CreateShortCut(shortcut_path)
+    shortcut.Targetpath = exe_path
+    shortcut.WorkingDirectory = os.path.dirname(exe_path)
+    shortcut.IconLocation = exe_path
+    shortcut.save()
+
+def remove_startup_shortcut():
+    if platform.system() != "Windows":
+        return
+    shortcut_path = get_startup_shortcut_path()
+    if shortcut_path and os.path.exists(shortcut_path):
+        os.remove(shortcut_path)
