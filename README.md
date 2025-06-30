@@ -24,6 +24,8 @@ A desktop application for practicing English pronunciation with text-to-speech a
 
 ## Screenshots
 
+![Image](https://github.com/user-attachments/assets/958e901d-d885-4591-a007-4b7b0a418210)
+
 The application features a clean interface with:
 - Word input field with speak and stop buttons
 - Large IPA pronunciation display
