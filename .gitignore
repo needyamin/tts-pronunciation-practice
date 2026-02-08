@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Electron
+dist/
+release-builds/
+out/
+
+# OS generated
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs
+.idea/
+.vscode/
+
+# Build artifacts
+*.exe
+*.dmg
+*.zip
